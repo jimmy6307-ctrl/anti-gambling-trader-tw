@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..antiscam.signals import _FOLLOW_KEYWORDS
-from ..metrics.performance import PerformanceMetrics, compute_metrics
+from ..metrics.performance import compute_metrics
 from ..models import TradeLog
 from ..verdict.judge import VerdictLevel, judge
 
