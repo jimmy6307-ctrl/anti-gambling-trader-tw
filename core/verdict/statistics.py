@@ -15,6 +15,15 @@ import math
 import random
 from dataclasses import dataclass
 
+# 單尾 α=0.05 的常態分位數,與 80% 檢定力的分位數。
+# 樣本量估計需同時涵蓋「型 I 錯誤」與「型 II 錯誤(檢定力)」——
+# 只用 z_alpha(或原本寫死的常數 2)等於只有約 50% 檢定力,會低估所需樣本。
+Z_ALPHA_ONE_SIDED = 1.6449
+Z_POWER_80 = 0.8416
+
+# 負期望時「所需樣本量」沒有意義的哨兵值(對外一律轉成 None,不顯示給使用者)
+NEGATIVE_EDGE_SENTINEL = 9999
+
 
 @dataclass
 class SignificanceResult:
@@ -196,14 +205,59 @@ def required_sample_size(win_rate: float, payoff_ratio: float) -> int:
     # 每筆的期望(R 為單位)與其變異,用來估所需樣本
     edge = win_rate * payoff_ratio - (1 - win_rate)
     if edge <= 0:
-        return 9999  # 負期望:再多樣本也驗證不出「優勢」
+        return NEGATIVE_EDGE_SENTINEL  # 負期望:再多樣本也驗證不出「優勢」
 
     # 報酬的近似變異(白努利 × 報酬幅度)
     var = (
         win_rate * (payoff_ratio - edge) ** 2
         + (1 - win_rate) * (-1 - edge) ** 2
     )
-    # 要讓 t ≈ 2(約 95% 信心),需 n ≈ (2 * sd / edge)^2
     sd = math.sqrt(var)
-    n = (2 * sd / edge) ** 2
+    # n ≈ ((z_alpha + z_power) * sd / edge)^2
+    # 原本用常數 2,約等於只有 50% 檢定力(等於擲硬幣決定能不能驗出優勢),
+    # 系統性低估所需樣本、給使用者「我交易夠多了」的錯誤安心。
+    n = ((Z_ALPHA_ONE_SIDED + Z_POWER_80) * sd / edge) ** 2
     return max(30, int(math.ceil(n)))
+
+
+def required_sample_size_from_pnls(
+    pnls: list[float], *, alpha: float = 0.05, power: float = 0.8
+) -> int | None:
+    """用『真實的損益樣本變異』估算所需樣本量(比二項模型貼近現實)。
+
+    n ≈ ((z_alpha + z_power) * std / mean)^2
+
+    二項模型假設「贏必得 payoff 個 R、輸必失 1 個 R」(組內零變異),
+    但真實交易的贏家之間、輸家之間離散度很大,因此二項模型只是
+    **最樂觀的下限**。有實際 pnl 時應優先用這個函式。
+
+    Returns:
+        所需樣本數;若平均損益 <= 0(負期望)則回傳 None(再多樣本也沒用)。
+    """
+    n = len(pnls)
+    if n < 2:
+        return None
+    mean = sum(pnls) / n
+    if mean <= 0:
+        return None
+    var = sum((p - mean) ** 2 for p in pnls) / (n - 1)
+    std = math.sqrt(var)
+    if std == 0:
+        return 30
+    z = Z_ALPHA_ONE_SIDED + Z_POWER_80
+    if abs(power - 0.8) > 1e-9:
+        z = Z_ALPHA_ONE_SIDED + _z_from_power(power)
+    need = (z * std / mean) ** 2
+    return max(30, int(math.ceil(need)))
+
+
+def _z_from_power(power: float) -> float:
+    """由檢定力反推 z(標準常態分位數),用二分法,純標準庫。"""
+    lo, hi = -6.0, 6.0
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if _normal_cdf(mid) < power:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2

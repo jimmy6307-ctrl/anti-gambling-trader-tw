@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 from ..metrics.performance import PerformanceMetrics, compute_metrics
@@ -90,13 +91,21 @@ def _degr_word(degradation: float) -> str:
     return f"衰減 {degradation:.0%}"
 
 
-def walk_forward_validate(
+def holdout_validate(
     log: TradeLog,
     *,
     split_ratio: float = 0.7,
     n_bootstrap: int = 3000,
 ) -> OutOfSampleReport:
-    """依時間把交易切成樣本內 / 樣本外,比較優勢是否延續。
+    """依時間做**單一切點**的樣本內 / 樣本外驗證,比較優勢是否延續。
+
+    命名說明:這是「單一時序 holdout」,**不是**滾動式 walk-forward
+    (多折前進驗證)。舊名 walk_forward_validate 名實不符,已改名;
+    舊名保留為 deprecated alias。
+
+    為何不做真正的多折滾動:本工具的典型樣本只有 30~60 筆,切成多折後
+    每折僅約 10 筆,顯著性檢定幾乎必然失效(實測每折樣本外顯著率僅 15~25%),
+    反而製造大量假陰性。單一 holdout 在此樣本規模下是較誠實的選擇。
 
     Args:
         log:         交易紀錄
@@ -189,3 +198,17 @@ def walk_forward_validate(
         headline=headline,
         interpretation=interp,
     )
+
+
+def walk_forward_validate(*args, **kwargs) -> OutOfSampleReport:
+    """已棄用:請改用 holdout_validate()。
+
+    舊名暗示這是滾動式 walk-forward,但實作為單一時序 holdout,名實不符。
+    """
+    warnings.warn(
+        "walk_forward_validate() 已棄用,請改用 holdout_validate()。"
+        "舊名暗示滾動式多折驗證,實際為單一時序 holdout。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return holdout_validate(*args, **kwargs)

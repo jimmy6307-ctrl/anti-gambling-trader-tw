@@ -23,19 +23,29 @@ from .base import (
 class PaperBroker(BrokerAdapter):
     """以記憶體模擬的紙上券商。
 
-    注意:本模擬只支援『做多』(買進後賣出平倉)。不支援裸放空 ——
-    放空牽涉保證金、借券費、強制平倉等,正確模型化太複雜;與其給出錯誤的
-    現金/權益數字,本模擬選擇在賣出超過持有部位時直接拒單。
+    預設只支援『做多』(買進後賣出平倉):賣出超過持倉會直接拒單。
+    若要模擬放空,明確傳入 allow_short=True —— 此時採 naive 現金會計:
+    開空/回補的損益方向正確,但**不含**借券費、融資利息、資金費率、
+    保證金鎖定與強制平倉。這是刻意的取捨:與其給出「半真」的保證金模型
+    讓人誤以為已建模成本,不如誠實標明這是簡化模型(見 SHORT_DISCLAIMER)。
 
     Args:
         cash:        起始資金
         fee_rate:    每筆成交的手續費率(模擬交易成本)
         slippage:    市價單的模擬滑價率
         price_feed:  可選的報價函式 symbol -> price;未提供時需用 set_price 餵價
+        allow_short: 是否允許裸放空(預設 False)。開啟後為簡化模型,估值偏樂觀。
     """
 
     name = "paper"
     is_live = False
+
+    #: 開啟 allow_short 時,對使用者顯示的免責說明(刻意冗長,逼你讀完)
+    SHORT_DISCLAIMER = (
+        "⚠️ 放空為『簡化模型』:未計入借券費 / 融券手續費 / 融資利息 / "
+        "資金費率 / 保證金鎖定 / 維持率與強制平倉。估值偏樂觀,"
+        "僅供方向性損益驗證,不可當作真實放空的績效預期。"
+    )
 
     def __init__(
         self,
@@ -45,6 +55,7 @@ class PaperBroker(BrokerAdapter):
         slippage: float = 0.0005,
         currency: str = "USD",
         price_feed=None,
+        allow_short: bool = False,
     ) -> None:
         super().__init__()
         self._cash = cash
@@ -52,6 +63,9 @@ class PaperBroker(BrokerAdapter):
         self._slippage = slippage
         self._currency = currency
         self._price_feed = price_feed
+        # 預設 False:賣出超過持倉直接拒單。設為 True 時允許裸放空,
+        # 但採 naive 現金會計(見 SHORT_DISCLAIMER),不假裝已建模借券成本。
+        self._allow_short = allow_short
         self._prices: dict[str, float] = {}
         self._positions: dict[str, Position] = {}
         self._order_seq = 0
@@ -116,24 +130,31 @@ class PaperBroker(BrokerAdapter):
                     ok=False, message=f"資金不足:需 {cost:,.2f},現金 {self._cash:,.2f}"
                 )
         else:
-            # 賣出:本紙上模擬只支援做多(平多倉),不支援裸放空。
-            # 裸放空牽涉保證金、借券費、強制平倉等,正確模型化太複雜;
-            # 與其給出錯誤的現金/權益數字,不如誠實拒單。
+            # 賣出。預設(allow_short=False)只支援做多:賣出不得超過持倉。
+            # 裸放空牽涉保證金、借券費、強制平倉,正確建模太複雜;
+            # 與其給出錯誤的現金/權益數字,預設誠實拒單。
             held = self._positions.get(order.symbol)
             held_qty = held.quantity if held else 0.0
-            if order.quantity > held_qty + 1e-9:
+            if not self._allow_short and order.quantity > held_qty + 1e-9:
                 return OrderResult(
                     ok=False,
                     message=(
                         f"賣出數量 {order.quantity:g} 超過持有部位 {held_qty:g}。"
-                        "本紙上模擬只支援做多(不支援裸放空)。"
+                        "本紙上模擬預設只支援做多;要模擬放空請用 "
+                        "PaperBroker(allow_short=True)(簡化模型,不含借券費)。"
                     ),
                 )
-            # 平多倉:回收賣出金額,扣手續費
+            # 平多倉 / (allow_short 時)開空:回收賣出金額,扣手續費
             cost = -notional + fee
 
         self._cash -= cost
         self._apply_fill(order.symbol, signed_qty, fill_price)
+
+        # 若這筆成交讓部位變成淨空單,附上放空的簡化模型免責說明
+        pos_after = self._positions.get(order.symbol)
+        msg = "paper fill"
+        if pos_after is not None and pos_after.quantity < 0:
+            msg = f"paper fill / {self.SHORT_DISCLAIMER}"
 
         self._order_seq += 1
         result = OrderResult(
@@ -141,7 +162,7 @@ class PaperBroker(BrokerAdapter):
             order_id=f"PAPER-{self._order_seq:06d}",
             filled_quantity=order.quantity,
             avg_price=fill_price,
-            message="paper fill",
+            message=msg,
             raw={"fee": fee, "tag": order.client_tag},
         )
         self.fills.append(result)

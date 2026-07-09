@@ -19,6 +19,7 @@ from ..models import TradeLog
 from .statistics import (
     SignificanceResult,
     required_sample_size,
+    required_sample_size_from_pnls,
     test_expectancy_positive,
 )
 
@@ -127,6 +128,22 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
             "這是『常贏小錢、偶爾賠大錢』的危險結構,一次大虧就會回吐所有獲利。"
         ))
 
+    # 3b. 安全邊際過薄:期望值雖為正,但盈虧比只比「打平門檻」高一點點。
+    #     硬切點(payoff<0.4)會漏掉「payoff 剛好 0.5、勝率 0.7」這種
+    #     正 EV 卻極脆弱的結構 —— 勝率只要小幅下滑就會由正翻負。
+    #     用連續的 edge_margin 補上,但保持白話可解釋。
+    if m.expectancy > 0 and m.win_rate > 0.5 and m.losses > 0:
+        breakeven_payoff = (1 - m.win_rate) / m.win_rate   # 讓期望值 = 0 的盈虧比
+        edge_margin = m.payoff_ratio - breakeven_payoff
+        if 0 < edge_margin < 0.25 * max(breakeven_payoff, 1e-9):
+            flags.append(RedFlag(
+                "thin_edge_margin", "low",
+                f"你的盈虧比 {m.payoff_ratio:.2f} 只比打平門檻 {breakeven_payoff:.2f} "
+                f"高一點點(安全邊際 {edge_margin:.2f})。"
+                f"以你 {m.win_rate:.0%} 的勝率,只要勝率稍微下滑,期望值就會由正翻負;"
+                "而且平均要贏好幾次,才補得回一次大虧。這種優勢很脆弱。"
+            ))
+
     # 4. 極端回撤:即使最終獲利,過程中也曾瀕臨毀滅
     if m.max_drawdown_pct > 0.5:
         flags.append(RedFlag(
@@ -183,7 +200,15 @@ def judge(
     m = metrics or compute_metrics(log)
     pnls = [t.pnl or 0.0 for t in log]
     sig = test_expectancy_positive(pnls, n_bootstrap=n_bootstrap)
-    req = required_sample_size(m.win_rate, m.payoff_ratio)
+
+    # 所需樣本量:有足夠實際損益時,用「真實樣本變異」估算(較貼近現實);
+    # 否則退回二項模型(那只是最樂觀的下限,因為它假設組內零變異)。
+    req = None
+    if len(pnls) >= 10:
+        req = required_sample_size_from_pnls(pnls)
+    if req is None:
+        req = required_sample_size(m.win_rate, m.payoff_ratio)
+
     flags = _scan_red_flags(m, sig)
 
     reasons: list[str] = []
@@ -285,9 +310,18 @@ def judge(
             f"平均每筆損益 {sig.mean:+.2f},bootstrap p={sig.p_value_bootstrap:.3f}、"
             f"t 檢定 p={sig.p_value_t:.3f},雙雙顯著。"
         )
-        reasons.append(
-            f"信賴區間 [{sig.ci_low:.2f}, {sig.ci_high:.2f}] 完全落在 0 以上。"
-        )
+        # is_significant 只要求單尾 p_boot < 0.05,而 ci_low 是雙尾 2.5% 分位:
+        # 當 0.025 <= p_boot < 0.05 時 ci_low 可能為負。不能硬寫「完全落在 0 以上」,
+        # 否則會與報告同頁印出的負下界直接矛盾(對使用者說假話)。
+        if sig.ci_low > 0:
+            reasons.append(
+                f"信賴區間 [{sig.ci_low:.2f}, {sig.ci_high:.2f}] 完全落在 0 以上。"
+            )
+        else:
+            reasons.append(
+                f"但 95% 信賴區間 [{sig.ci_low:.2f}, {sig.ci_high:.2f}] 的下界仍略低於 0"
+                "(p 值接近顯著門檻)—— 證據屬『邊際等級』,需再累積樣本鞏固。"
+            )
         advice += [
             "這是『目前為止』的證據,不是未來的保證。市場會變,優勢會衰減。",
             "持續監控:若新交易讓顯著性掉回不顯著,代表優勢可能正在消失。",

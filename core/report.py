@@ -109,19 +109,23 @@ def render_text_report(
         L.append(f"  ⚠ {note}")
     L.append("")
 
-    # ── 逐策略裁決(揪出『哪一招在送錢』)──
+    # ── 逐策略體檢(描述統計,不做優勢認證)──
     if tag_verdicts:
         L.append("【🔍 各策略體檢 — 哪一招在送錢?(由最差到最好)】")
-        L.append("  策略標籤            筆數   每筆期望值      裁決")
-        L.append("  " + "─" * 56)
+        L.append("  策略標籤            筆數   每筆期望值      總損益        狀態")
+        L.append("  " + "─" * 66)
         for tv in tag_verdicts:
-            badge = tv.level.badge
-            note = " *樣本少" if tv.low_sample else ""
             L.append(
                 f"  {tv.tag[:16]:<16}  {tv.n_trades:>4}   "
-                f"{_money(tv.expectancy):>12}   {badge}{note}"
+                f"{_money(tv.expectancy):>12}  {_money(tv.total_pnl):>12}   "
+                f"{tv.descriptor}"
             )
-        L.append("  (帶 * 者樣本較少,裁決僅供參考)")
+        L.append(
+            "  註:這裡只呈現『描述統計』,不對個別策略做優勢認證 —— 因為對多個策略"
+        )
+        L.append(
+            "      各做一次統計檢定,會讓運氣被誤認成優勢(策略越多、誤判機率越高)。"
+        )
         L.append("")
 
     # ── 跟單 / 聽明牌的成績單(反詐實用化:用你自己的錢證明跟單必賠)──
@@ -183,7 +187,16 @@ def render_text_report(
         L.append("│  真正的投資優勢,經得起統計檢定與時間考驗。慢慢來,別賭。        │")
         L.append("└" + "─" * 66 + "┘")
     else:
-        L.append("✅ 你的策略目前通過了統計檢定與樣本外驗證,屬於少數具備優勢的情況。")
+        # 誠實性修正:裁決等級(judge)只看樣本內顯著性,「完全不看樣本外」。
+        # 因此不能無條件宣稱「通過了樣本外驗證」—— 必須依實際的 oos 結果措辭,
+        # 否則會出現「樣本外區塊寫『優勢消失』、結尾卻寫『通過樣本外驗證』」的自相矛盾。
+        if oos is not None and oos.edge_persisted:
+            L.append("✅ 你的策略通過了統計檢定,且樣本外驗證顯示優勢延續,屬於少數具備優勢的情況。")
+        elif oos is not None:
+            L.append("🟡 你的策略通過了統計檢定,但『樣本外驗證尚未確認』(見上方樣本外驗證區塊)。")
+            L.append("   樣本內的優勢不等於未來的優勢 —— 請先確認優勢能延續,再考慮加碼或自動化。")
+        else:
+            L.append("✅ 你的策略通過了統計檢定(本次未做樣本外驗證)。")
         L.append("   但請記得:這是『目前』的證據,不是『未來』的保證。持續監控、嚴守紀律。")
     L.append("")
     L.append("─" * 70)

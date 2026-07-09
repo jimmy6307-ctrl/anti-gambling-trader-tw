@@ -15,12 +15,26 @@ from dataclasses import dataclass, field
 from ..antiscam.signals import _FOLLOW_KEYWORDS
 from ..metrics.performance import PerformanceMetrics, compute_metrics
 from ..models import TradeLog
-from ..verdict.judge import Verdict, VerdictLevel, judge
+from ..verdict.judge import VerdictLevel, judge
 
 
 @dataclass
 class TagVerdict:
-    """單一策略標籤的裁決摘要。"""
+    """單一策略標籤的『描述統計』摘要。
+
+    刻意**不做顯著性檢定、不頒發優勢徽章**。原因:
+
+      對 K 個標籤各跑一次顯著性檢定卻不做多重比較校正,會讓「至少一個標籤
+      被誤判為具優勢」的機率隨 K 膨脹(蒙地卡羅實測:K=5 → 15%,K=10 → 30%,
+      遠超名目的 5%)。對一個宗旨是「戳破運氣幻覺」的工具,自己對純隨機的
+      雜訊頒發「🟩 具優勢」徽章,是直接的自我矛盾。
+
+      而 per-tag 樣本通常只有 5~30 筆,做 Holm/Bonferroni 校正後幾乎永遠
+      不顯著 —— 與其給一個沒有資訊量的「不顯著」,不如誠實地只報描述統計,
+      讓使用者看「哪一招在賠錢」,而不是「哪一招被認證為有優勢」。
+
+      整體裁決(整份紀錄只做一次檢定)仍保留完整的顯著性判定。
+    """
 
     tag: str
     n_trades: int
@@ -28,20 +42,32 @@ class TagVerdict:
     win_rate: float
     profit_factor: float
     total_pnl: float
-    level: VerdictLevel
-    is_significant: bool
     low_sample: bool          # 樣本太少,結論僅供參考
+
+    @property
+    def is_losing(self) -> bool:
+        return self.expectancy < 0
+
+    @property
+    def descriptor(self) -> str:
+        """白話描述(非優勢認證)。"""
+        base = "🔻 賠錢中" if self.is_losing else "🔺 賺錢中"
+        return f"{base}(樣本少)" if self.low_sample else base
 
 
 @dataclass
 class CounterfactualResult:
-    """反事實分析:停掉最差策略後的對照。"""
+    """反事實分析:停掉最差策略後的『會計式』前後對照。
+
+    刻意只做加減法(總損益、每筆期望值的前後差),**不重新下裁決、
+    不宣稱「不做這一招你就有救了」**。原因:最差的標籤是「從同一份資料裡挑出來的」,
+    挑完再對同一份資料重新檢定,屬於資料探勘(data dredging);其改善有很大一部分
+    來自回歸均值,把它講成「有救」是過度樂觀的認證。
+    """
 
     worst_tag: str
     before_expectancy: float
     after_expectancy: float
-    before_level: VerdictLevel
-    after_level: VerdictLevel
     before_total_pnl: float
     after_total_pnl: float
     message: str = ""
@@ -64,11 +90,15 @@ def per_tag_verdicts(
     log: TradeLog,
     *,
     min_tag_trades: int = 5,
-    n_bootstrap: int = 1500,
+    n_bootstrap: int = 1500,   # 保留參數以維持相容;不再用於顯著性檢定
 ) -> list[TagVerdict]:
-    """對每個有足夠樣本的策略標籤各下一次裁決,依期望值由低到高排序。
+    """對每個策略標籤產出『描述統計』,依期望值由低到高排序。
 
     最差的排最前面 —— 因為使用者最需要先看到『該砍哪一招』。
+
+    刻意不做顯著性檢定(見 TagVerdict 的說明):對多個標籤各檢定一次卻不做
+    多重比較校正,會系統性地把運氣誤認為優勢。這裡只誠實呈現「這一招賺或賠、
+    賠多少、樣本夠不夠」,把「是不是真優勢」的判斷留給整體裁決。
     """
     tags = {t.tag for t in log if t.tag}
     results: list[TagVerdict] = []
@@ -77,10 +107,6 @@ def per_tag_verdicts(
         if len(sub) < 2:
             continue
         m = compute_metrics(sub)
-        # 小 tag 用較低的 min_trades 門檻,但誠實標注樣本少
-        low_sample = len(sub) < 30
-        v = judge(sub, metrics=m, n_bootstrap=n_bootstrap,
-                  min_trades=min(min_tag_trades, 30))
         results.append(TagVerdict(
             tag=tag,
             n_trades=len(sub),
@@ -88,9 +114,7 @@ def per_tag_verdicts(
             win_rate=m.win_rate,
             profit_factor=m.profit_factor,
             total_pnl=m.total_pnl,
-            level=v.level,
-            is_significant=v.significance.is_significant,
-            low_sample=low_sample,
+            low_sample=len(sub) < 30,
         ))
     results.sort(key=lambda r: r.expectancy)   # 最差(最該砍)的排最前
     return results
@@ -115,30 +139,28 @@ def counterfactual_drop_worst(
         return None   # 最差的都沒在送錢,沒必要建議砍
 
     before_m = compute_metrics(log)
-    before_v = judge(log, metrics=before_m, n_bootstrap=n_bootstrap)
 
     after_log = log.filter(lambda t: t.tag != worst.tag, label=f"drop_{worst.tag}")
     if len(after_log) < 2:
         return None
     after_m = compute_metrics(after_log)
-    after_v = judge(after_log, metrics=after_m, n_bootstrap=n_bootstrap)
 
+    # 純會計式對照:只陳述「回測期間的加減法」,不重新下裁決、不宣稱「有救」。
     delta_exp = after_m.expectancy - before_m.expectancy
+    delta_pnl = after_m.total_pnl - before_m.total_pnl
     msg = (
-        f"光是停掉『{worst.tag}』這一招,整體每筆期望值就從 "
-        f"{before_m.expectancy:+.2f} 變成 {after_m.expectancy:+.2f}"
-        f"(改善 {delta_exp:+.2f}),裁決從「{_lvl(before_v.level)}」"
-        f"變成「{_lvl(after_v.level)}」。"
+        f"在這段回測期間,若當初沒做『{worst.tag}』這一招:"
+        f"總損益會從 {before_m.total_pnl:+,.2f} 變成 {after_m.total_pnl:+,.2f}"
+        f"(差 {delta_pnl:+,.2f});每筆期望值從 {before_m.expectancy:+.2f} "
+        f"變成 {after_m.expectancy:+.2f}(改善 {delta_exp:+.2f})。"
+        " 注意:這是『事後從同一份資料挑出最差的一招』再回頭算的假設情境,"
+        "改善有一部分來自回歸均值,不代表未來停掉它就一定會賺。"
     )
-    if before_v.should_discourage and not after_v.should_discourage:
-        msg += " ← 換句話說:不做這一招,你其實是有救的。"
 
     return CounterfactualResult(
         worst_tag=worst.tag,
         before_expectancy=before_m.expectancy,
         after_expectancy=after_m.expectancy,
-        before_level=before_v.level,
-        after_level=after_v.level,
         before_total_pnl=before_m.total_pnl,
         after_total_pnl=after_m.total_pnl,
         message=msg,
@@ -166,7 +188,9 @@ def follow_the_guru(
 
     follow_tags = sorted({t.tag for t in sub if t.tag})
     m = compute_metrics(sub)
-    v = judge(sub, metrics=m, n_bootstrap=n_bootstrap, min_trades=5)
+    # 用與整體裁決相同的樣本量門檻(不放寬到 5):跟單交易若只有幾筆,
+    # 不該被認證為「具優勢」,而應誠實回報樣本不足。
+    v = judge(sub, metrics=m, n_bootstrap=n_bootstrap)
 
     if m.expectancy < 0:
         msg = (
@@ -191,8 +215,3 @@ def follow_the_guru(
         follow_tags=follow_tags,
         message=msg,
     )
-
-
-def _lvl(level: VerdictLevel) -> str:
-    """等級中文名(集中定義於 VerdictLevel.display_name)。"""
-    return level.display_name

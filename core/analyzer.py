@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .backtest.validate import OutOfSampleReport, walk_forward_validate
+from .backtest.validate import OutOfSampleReport, holdout_validate
 from .ingest.loader import load_trades
 from .metrics.performance import PerformanceMetrics, compute_metrics
 from .models import Market, TradeLog
@@ -46,17 +46,23 @@ class AnalysisResult:
             self.tag_verdicts = []
 
     def as_dict(self) -> dict:
+        from .metrics.breakeven import compute_break_even
+
+        be = compute_break_even(self.metrics)
         return {
             "source": self.log.source,
             "markets": sorted(m.value for m in self.log.markets),
             "verdict": self.verdict.as_dict(),
             "profile": self.profile.as_dict(),
             "out_of_sample": self.out_of_sample.as_dict(),
+            # per-tag 為『描述統計』,刻意不含顯著性/優勢等級
+            # (多重比較未校正會把運氣誤認為優勢,見 strategy/per_tag.py)
             "tag_verdicts": [
                 {
                     "tag": tv.tag, "n_trades": tv.n_trades,
-                    "expectancy": tv.expectancy, "level": tv.level.value,
-                    "is_significant": tv.is_significant, "low_sample": tv.low_sample,
+                    "expectancy": tv.expectancy, "total_pnl": tv.total_pnl,
+                    "win_rate": tv.win_rate, "profit_factor": tv.profit_factor,
+                    "low_sample": tv.low_sample, "is_losing": tv.is_losing,
                 }
                 for tv in self.tag_verdicts
             ],
@@ -68,6 +74,22 @@ class AnalysisResult:
                     "level": self.follow_guru.level.value,
                 } if self.follow_guru else None
             ),
+            "counterfactual": (
+                {
+                    "worst_tag": self.counterfactual.worst_tag,
+                    "before_expectancy": self.counterfactual.before_expectancy,
+                    "after_expectancy": self.counterfactual.after_expectancy,
+                    "before_total_pnl": self.counterfactual.before_total_pnl,
+                    "after_total_pnl": self.counterfactual.after_total_pnl,
+                } if self.counterfactual else None
+            ),
+            "breakeven": {
+                "already_positive": be.already_positive,
+                "structurally_hard": be.structurally_hard,
+                "required_win_rate": be.required_win_rate,
+                "required_payoff_ratio": be.required_payoff_ratio,
+                "fee_cut_to_breakeven": be.fee_cut_to_breakeven,
+            },
         }
 
 
@@ -81,7 +103,7 @@ def analyze_log(
     metrics = compute_metrics(log)
     verdict = judge(log, metrics=metrics, n_bootstrap=n_bootstrap)
     profile = profile_strategy(log)
-    oos = walk_forward_validate(log)
+    oos = holdout_validate(log)
 
     # 逐策略裁決 + 反事實 + 跟單抽算(實用性核心)
     tag_verdicts = per_tag_verdicts(log)
