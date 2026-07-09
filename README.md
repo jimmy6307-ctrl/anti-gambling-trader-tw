@@ -21,7 +21,20 @@
 拆穿這些騙局**。詐騙最怕的，就是你冷靜地把它的承諾丟進數學裡檢驗。
 
 ```bash
-anti-gambling-trader scam-check     # 互動式檢測：你是不是遇到投資詐騙？
+# 貼上群組對話，掃描詐騙話術（不給假百分比，只給風險等級）
+anti-gambling-trader scan-text "老師帶單保證獲利，快加VIP客服"
+
+# 檢驗老師的宣稱：「勝率90%、月報酬20%」純靠運氣出現的機率是多少？
+anti-gambling-trader guru-check --win-rate 0.9 --trades 10 --monthly-return 0.2
+
+# 用數學算出「連贏10次的神人」有多容易靠運氣出現
+anti-gambling-trader survivorship
+
+# 鑑識老師/平台宣稱的報酬序列是否有可疑徵兆（過度平滑、不可能的夏普）
+anti-gambling-trader forensics --file 老師的月報酬.txt
+
+# 互動式自我檢測
+anti-gambling-trader scam-check
 ```
 
 詳見 **[反詐指南 docs/anti-scam.md](docs/anti-scam.md)**。
@@ -39,8 +52,13 @@ anti-gambling-trader scam-check     # 互動式檢測：你是不是遇到投資
 - **反事實分析**：算出「停掉最差那一招，整體會變怎樣」
 - **轉正數字**：告訴你「勝率要到幾 % / 盈虧比要拉到多少，期望值才會轉正」
 - **反詐偵測**：把「聽老師 / 跟單」的交易單獨抽出算期望值，用你自己的錢證明跟單必賠
+- **風險情境模擬**：用你的損益分布模擬未來，看有多少比例的路徑會爆倉
+- **時間趨勢**：月報、優勢衰減偵測（「你最近三個月期望值轉負」）
+- **HTML 報告 + 分享圖卡**：可存檔、可截圖傳給家人的鐵證
 - 反推你的交易邏輯，產生 **可回測的策略骨架**（backtrader / vectorbt / 通用）
 - 若判定**不適合長期投資，明確勸退**
+
+支援市場：台股、台股 ETF、**台指期 / 選擇權（含契約乘數）**、美股、加密貨幣、**外匯**。
 
 ## 為什麼做這個
 
@@ -185,24 +203,33 @@ cd my_bot && pip install -r requirements.txt && python main.py
 
 ```
 core/
-  models.py            # 統一資料模型（Trade / TradeLog）
+  models.py            # 統一資料模型（Trade / TradeLog，含契約乘數）
+  markets.py           # 市場規格：契約乘數白名單、代號辨識、槓桿標註
   analyzer.py          # 高階一行式進入點
-  cli.py               # 命令列介面
-  report.py            # 中文報告產生器
-  ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 三市場成本模型 + API 連接器
-  metrics/             # 績效指標計算（performance / breakeven 轉正數字）
-  verdict/             # 統計裁決引擎（反賭博核心）+ 顯著性檢定（真正的 t 分布）
-  strategy/            # 交易模式反推 + 策略骨架 + per_tag 逐策略裁決/反事實/跟單抽算
-  backtest/            # 樣本外驗證
-  antiscam/            # 反詐核心：詐騙特徵庫 + scam-check 檢測 + 受害軌跡偵測
-  broker/              # 券商抽象層 + PaperBroker + 13 種券商範本（registry / _tw / _more）
-  charts/              # 四種開源圖表庫範本 + 樣式預覽介面
+  cli.py               # 命令列介面（14 個指令）
+  report.py            # 中文文字報告
+  report_html.py       # HTML 報告 + 分享圖卡（XSS 安全、自包含）
+  ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 各市場成本模型
+  metrics/             # 績效指標（performance / breakeven 轉正數字）
+  verdict/             # 統計裁決引擎 + 顯著性檢定（真正的 t 分布，純標準庫）
+  strategy/            # 交易模式反推 + 策略骨架 + per_tag 描述統計/反事實/跟單抽算
+  backtest/            # 樣本外驗證（holdout_validate）
+  trend/               # 時間趨勢：月報彙總 + 優勢衰減偵測（單一固定切點，防 p-hacking）
+  montecarlo/          # 風險情境模擬：爆倉比例、最壞回撤、連虧機率
+  survivorship.py      # 倖存者偏差模擬器（精確 DP，非模擬近似）
+  forensics/           # 假績效統計鑑識（runs test / Lo 校正夏普 / 尾數卡方）
+  antiscam/            # 反詐核心：特徵庫 + scam-check + 話術偵測 + 假老師驗證器
+  broker/              # 券商抽象層 + PaperBroker + 13 種券商範本
+  charts/              # 四種開源圖表庫範本 + 樣式預覽
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 examples/              # 三市場範例資料
-tests/                 # 單元測試（test_core / test_trading_tools / test_antiscam
-                       #            / test_usability / test_engine）
+tests/                 # 8 個測試檔，134 個測試
 ```
+
+> **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
+> 不給「87% 是詐騙」這種未校準的假百分比、不做 Kelly 部位建議、不畫「信心度」儀表、
+> 不做未來報酬投射。詳見 [方法論](docs/methodology.md)。
 
 ## 測試
 
@@ -216,6 +243,9 @@ python tests/test_trading_tools.py
 python tests/test_antiscam.py
 python tests/test_usability.py
 python tests/test_engine.py
+python tests/test_debate_fixes.py
+python tests/test_trend.py
+python tests/test_expansion.py
 ```
 
 ## 作者

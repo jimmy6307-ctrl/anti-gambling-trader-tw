@@ -45,4 +45,7 @@ packages = [
     "core.charts",
     "core.scaffold",
     "core.antiscam",
+    "core.forensics",
+    "core.montecarlo",
+    "core.trend",
 ]

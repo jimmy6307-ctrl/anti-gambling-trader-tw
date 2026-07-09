@@ -208,6 +208,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     a.add_argument("--json", metavar="PATH", help="把結構化結果寫成 JSON 檔")
     a.add_argument("--strategy", metavar="PATH", help="把策略骨架寫成 .py 檔")
+    a.add_argument("--html", metavar="PATH", help="輸出自包含的 HTML 報告(可存檔分享)")
+    a.add_argument(
+        "--card", metavar="PATH", help="輸出分享圖卡 HTML(截圖傳給家人的鐵證)"
+    )
     a.add_argument(
         "--bootstrap", type=int, default=5000, help="bootstrap 重抽次數(預設 5000)"
     )
@@ -273,6 +277,65 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", default="trades_template.csv", help="範本輸出路徑"
     )
 
+    # ── scan-text:詐騙話術文字偵測 ──
+    st = sub.add_parser(
+        "scan-text", help="貼上群組對話 / 廣告文案,掃描詐騙話術特徵"
+    )
+    st.add_argument("text", nargs="?", help="要掃描的文字(省略則從標準輸入讀)")
+    st.add_argument("--file", metavar="PATH", help="從檔案讀取文字")
+
+    # ── guru-check:假老師績效驗證器 ──
+    gc = sub.add_parser(
+        "guru-check", help="檢驗老師宣稱的績效:純靠運氣出現的機率有多高?"
+    )
+    gc.add_argument("--win-rate", type=float, help="宣稱的勝率(0.9 = 90%%)")
+    gc.add_argument("--trades", type=int, help="宣稱基於幾筆交易(沒有就無法檢驗)")
+    gc.add_argument("--winning-months", type=int, help="宣稱連續獲利幾個月")
+    gc.add_argument("--total-months", type=int, help="完整紀錄總共幾個月")
+    gc.add_argument("--monthly-return", type=float, help="宣稱的月報酬(0.2 = 20%%)")
+    gc.add_argument("--payoff-ratio", type=float, help="宣稱的盈虧比")
+    gc.add_argument("--gurus", type=int, default=1000, help="市面上有多少人自稱老師")
+    gc.add_argument(
+        "--null-win-prob", type=float, default=0.5,
+        help="虛無假設下的單次勝率(預設 0.5;若標的長期上漲可調高至 0.55~0.62)",
+    )
+
+    # ── survivorship:倖存者偏差模擬器 ──
+    sv = sub.add_parser(
+        "survivorship", help="用數學算出「連贏 N 次的神人」有多容易靠運氣出現"
+    )
+    sv.add_argument("--traders", type=int, default=1000, help="群組人數")
+    sv.add_argument("--trials", type=int, default=20, help="每人預測幾次")
+    sv.add_argument("--streak", type=int, default=10, help="宣稱的連勝次數")
+
+    # ── forensics:假績效統計鑑識 ──
+    fo = sub.add_parser(
+        "forensics", help="鑑識老師/平台宣稱的報酬序列是否有可疑徵兆"
+    )
+    fo.add_argument(
+        "returns", nargs="?",
+        help="報酬序列,逗號分隔(如 0.02,0.03,-0.01)。0.02 = 2%%",
+    )
+    fo.add_argument("--file", metavar="PATH", help="從檔案讀取(每行一個報酬)")
+    fo.add_argument(
+        "--periods-per-year", type=int, default=12, help="一年幾期(月=12,日=252)"
+    )
+
+    # ── risk-sim:風險情境模擬 ──
+    rs = sub.add_parser(
+        "risk-sim", help="用你的損益分布模擬未來情境(爆倉比例、最壞回撤)"
+    )
+    rs.add_argument("file", nargs="?", help="交易紀錄檔")
+    rs.add_argument("--example", choices=["tw", "us", "crypto"], help="用內建範例")
+    rs.add_argument("--equity", type=float, help="起始權益(未給則粗估)")
+    rs.add_argument("--future-trades", type=int, default=200, help="模擬未來幾筆")
+    rs.add_argument("--paths", type=int, default=5000, help="模擬幾條路徑")
+
+    # ── trend:時間趨勢分析 ──
+    tr = sub.add_parser("trend", help="月報趨勢與優勢衰減偵測")
+    tr.add_argument("file", nargs="?", help="交易紀錄檔")
+    tr.add_argument("--example", choices=["tw", "us", "crypto"], help="用內建範例")
+
     return p
 
 
@@ -329,6 +392,18 @@ def main(argv: list[str] | None = None) -> int:
                     "執行時會中止,逼你先把策略驗證好。"
                 )
 
+        if args.html:
+            from .report_html import render_html_report
+
+            Path(args.html).write_text(render_html_report(result), encoding="utf-8")
+            print(f"[已輸出 HTML 報告] {args.html}(用瀏覽器打開)")
+
+        if args.card:
+            from .report_html import render_share_card
+
+            Path(args.card).write_text(render_share_card(result), encoding="utf-8")
+            print(f"[已輸出分享圖卡] {args.card}(用瀏覽器打開後截圖)")
+
         # ── 下一步引導(讓使用者知道接下來能做什麼)──
         _print_next_steps(result, args, target)
 
@@ -378,6 +453,164 @@ def main(argv: list[str] | None = None) -> int:
         # 高風險時回傳非 0,方便腳本判斷
         return 2 if result.risk_level in ("極高", "高") else 0
 
+    if args.command == "scan-text":
+        return _cmd_scan_text(args)
+
+    if args.command == "guru-check":
+        return _cmd_guru_check(args)
+
+    if args.command == "survivorship":
+        from .survivorship import guru_illusion, render_guru_illusion
+
+        g = guru_illusion(
+            n_traders=args.traders, n_trials=args.trials, streak=args.streak
+        )
+        print(render_guru_illusion(g))
+        return 0
+
+    if args.command == "forensics":
+        return _cmd_forensics(args)
+
+    if args.command == "risk-sim":
+        return _cmd_risk_sim(args)
+
+    if args.command == "trend":
+        return _cmd_trend(args)
+
+    return 0
+
+
+def _read_text_input(args) -> str | None:
+    """從參數 / 檔案 / 標準輸入取得文字。"""
+    if getattr(args, "file", None):
+        return Path(args.file).read_text(encoding="utf-8")
+    if getattr(args, "text", None):
+        return args.text
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return None
+
+
+def _cmd_scan_text(args) -> int:
+    from .antiscam.text_scanner import render_scan, scan_text
+
+    text = _read_text_input(args)
+    if not text:
+        print(
+            "請提供要掃描的文字。用法:\n"
+            '  anti-gambling-trader scan-text "老師帶單保證獲利,快加VIP"\n'
+            "  anti-gambling-trader scan-text --file 對話紀錄.txt\n"
+            "  cat 對話.txt | anti-gambling-trader scan-text",
+            file=sys.stderr,
+        )
+        return 1
+    r = scan_text(text)
+    print(render_scan(r))
+    return 2 if r.risk_level in ("極高", "高") else 0
+
+
+def _cmd_guru_check(args) -> int:
+    from .antiscam.guru_claim import analyze_guru_claim, render_guru_claim
+
+    a = analyze_guru_claim(
+        claimed_win_rate=args.win_rate,
+        claimed_trades=args.trades,
+        claimed_winning_months=args.winning_months,
+        total_months=args.total_months,
+        claimed_monthly_return=args.monthly_return,
+        payoff_ratio=args.payoff_ratio,
+        n_gurus_in_market=args.gurus,
+        null_win_prob=args.null_win_prob,
+    )
+    print(render_guru_claim(a))
+    bad = a.verdict in (
+        "宣稱自相矛盾", "宣稱在數學上不可能持續", "可由倖存者偏差解釋",
+        "與純運氣無法區分",
+    )
+    return 2 if bad else 0
+
+
+def _cmd_forensics(args) -> int:
+    from .forensics import analyze_returns, render_forensics
+
+    raw: str | None = None
+    if args.file:
+        raw = Path(args.file).read_text(encoding="utf-8")
+    elif args.returns:
+        raw = args.returns
+    if not raw:
+        print(
+            "請提供報酬序列。用法:\n"
+            "  anti-gambling-trader forensics 0.02,0.031,-0.005,0.028,...\n"
+            "  anti-gambling-trader forensics --file 老師的月報酬.txt",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        vals = [
+            float(x.strip())
+            for x in raw.replace("\n", ",").split(",")
+            if x.strip() and not x.strip().startswith("#")
+        ]
+    except ValueError as exc:
+        print(f"錯誤:報酬序列格式無法解析({exc})", file=sys.stderr)
+        return 1
+
+    f = analyze_returns(vals, periods_per_year=args.periods_per_year)
+    print(render_forensics(f))
+    return 2 if f.suspicion_level in ("高度可疑", "可疑") else 0
+
+
+def _load_for_tool(args):
+    """risk-sim / trend 共用的資料載入。"""
+    from .ingest.loader import load_trades
+
+    if getattr(args, "example", None):
+        path, market = _example_path(args.example)
+        return load_trades(path, market_hint=market)
+    if not getattr(args, "file", None):
+        return None
+    return load_trades(args.file)
+
+
+def _cmd_risk_sim(args) -> int:
+    from .montecarlo import render_scenario, simulate_ruin_scenario
+
+    try:
+        log = _load_for_tool(args)
+    except (ValueError, FileNotFoundError, ImportError) as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
+    if log is None:
+        print("請提供交易紀錄檔,或用 --example tw|us|crypto", file=sys.stderr)
+        return 1
+
+    pnls = [t.pnl or 0.0 for t in log]
+    s = simulate_ruin_scenario(
+        pnls,
+        start_equity=args.equity,
+        n_future_trades=args.future_trades,
+        n_paths=args.paths,
+    )
+    if s is None:
+        print("交易筆數太少(< 10),無法做有意義的情境模擬。", file=sys.stderr)
+        return 1
+    print(render_scenario(s))
+    return 2 if s.ruin_fraction > 0.1 else 0
+
+
+def _cmd_trend(args) -> int:
+    from .trend import analyze_trend, render_trend_text
+
+    try:
+        log = _load_for_tool(args)
+    except (ValueError, FileNotFoundError, ImportError) as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
+    if log is None:
+        print("請提供交易紀錄檔,或用 --example tw|us|crypto", file=sys.stderr)
+        return 1
+    print(render_trend_text(analyze_trend(log)))
     return 0
 
 

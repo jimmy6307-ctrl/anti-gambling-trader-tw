@@ -100,9 +100,17 @@ def test_loader_skips_comment_and_records_bad_row():
 # ── infer_market ───────────────────────────────────────────
 def test_infer_market():
     assert infer_market("2330") == Market.TW_STOCK
-    assert infer_market("00878") == Market.TW_STOCK
+    # 00 開頭為台股 ETF(證交稅 0.1%,非一般股票的 0.3%)
+    assert infer_market("00878") == Market.TW_ETF
+    assert infer_market("0050") == Market.TW_ETF
     assert infer_market("BTCUSDT") == Market.CRYPTO
     assert infer_market("AAPL") == Market.US_STOCK
+    # 回歸測試:外匯不得被誤判為加密貨幣(舊版因「以 USD 結尾」而誤判)
+    assert infer_market("EURUSD") == Market.FOREX
+    assert infer_market("GBPUSD") == Market.FOREX
+    # 期貨 / 選擇權
+    assert infer_market("TXF") == Market.TW_FUTURES
+    assert infer_market("TXO") == Market.TW_OPTIONS
 
 
 # ── breakeven 進階分支 ─────────────────────────────────────

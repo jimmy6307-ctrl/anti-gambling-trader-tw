@@ -8,11 +8,27 @@
 詐騙的共同核心只有一個：**用「倖存者偏差」與「精選證據」，讓你誤以為有穩賺的捷徑。**
 而它們最怕的，就是你冷靜地把它的承諾丟進數學裡檢驗。
 
-想快速自我檢測，直接執行：
+## 🛠 四個拆穿詐騙的工具
 
 ```bash
+# 1. 貼上群組對話 / 廣告文案，掃描話術特徵（逐句標註）
+anti-gambling-trader scan-text "老師帶單保證獲利，名額有限快加VIP"
+
+# 2. 檢驗老師的宣稱：純靠運氣出現的機率有多高？
+anti-gambling-trader guru-check --win-rate 0.9 --trades 10 --monthly-return 0.2
+
+# 3. 用數學算出「連贏10次的神人」有多容易靠運氣出現
+anti-gambling-trader survivorship --traders 1000 --streak 10
+
+# 4. 鑑識老師/平台的報酬序列（過度平滑？不可能的夏普？）
+anti-gambling-trader forensics --file 老師的月報酬.txt
+
+# 互動式自我檢測
 anti-gambling-trader scam-check
 ```
+
+> 這些工具**只回答一個問題**：「在他毫無能力的假設下，這種績效有多容易靠運氣發生？」
+> 它們不指控任何人是騙子 —— 但當機率算出來是 99.7% 時，你就知道該怎麼想了。
 
 ---
 

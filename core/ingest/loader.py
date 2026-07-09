@@ -13,6 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from ..markets import contract_multiplier as _contract_multiplier
+from ..markets import infer_market as _infer_market
+from ..markets import is_leveraged as _is_leveraged
 from ..models import Market, Side, Trade, TradeLog
 from .costs import estimate_round_trip_cost
 
@@ -100,17 +103,12 @@ def _build_field_map(columns: Iterable[str]) -> dict[str, str]:
 
 
 def infer_market(symbol: str, hint: Market | None = None) -> Market:
-    """從標的代號推斷市場別。使用者有指定 hint 時優先採用。"""
-    if hint and hint != Market.UNKNOWN:
-        return hint
-    s = str(symbol).strip().upper()
-    if _CRYPTO_PATTERN.search(s):
-        return Market.CRYPTO
-    if _TW_PATTERN.match(s):
-        return Market.TW_STOCK
-    if _US_PATTERN.match(s):
-        return Market.US_STOCK
-    return Market.UNKNOWN
+    """從標的代號推斷市場別。使用者有指定 hint 時優先採用。
+
+    實作已移至 core/markets.py(修正了「EURUSD 被誤判為加密貨幣」的 bug,
+    並新增期貨 / 選擇權 / 外匯 / 台股 ETF 的辨識)。此處保留為相容入口。
+    """
+    return _infer_market(symbol, hint)
 
 
 def _parse_side(value: Any) -> Side:
@@ -288,6 +286,7 @@ def load_trades(
     trades: list[Trade] = []
     skipped = 0
     skip_reasons: list[str] = []   # 收集略過原因,回報給使用者(不再靜默吞錯)
+    unknown_multiplier_symbols: set[str] = set()   # 槓桿商品但查不到契約乘數
     for row in rows:
         row_no = len(trades) + skipped + 1
         symbol = str(get(row, "symbol", "")).strip()
@@ -319,20 +318,31 @@ def load_trades(
         exit_price = _to_float(get(row, "exit_price"), 0.0) or 0.0
         quantity = (_to_float(get(row, "quantity"), 0.0) or 0.0) * lot_multiplier
 
+        # 契約乘數:期貨/選擇權必須乘,否則損益少算 200 倍。
+        # 查不到就是 1.0 + unknown 旗標,絕不亂猜。
+        mult, mult_known = _contract_multiplier(symbol)
+
         fees = _to_float(get(row, "fees"), None)
         pnl = _to_float(get(row, "pnl"), None)
         tag = get(row, "tag")
         tag = str(tag).strip() if tag not in (None, "") else None
 
-        # 成本處理:使用者沒給 fees 且開啟自動估算時,補上估計成本
+        # 成本處理:使用者沒給 fees 且開啟自動估算時,補上估計成本。
+        # 但槓桿商品若乘數未知,拒絕自動估算(寧可 fees=0 讓使用者自己填,
+        # 也不要用錯誤的乘數算出錯 200 倍的成本)。
         if fees is None and auto_estimate_costs and entry_price and quantity:
-            # 當沖判定:進出場同一交易日(與 Trade.is_day_trade 同義)。
-            # 台股當沖證交稅減半。
-            is_day_trade = entry_time.date() == exit_time.date()
-            fees = estimate_round_trip_cost(
-                market, side, entry_price, exit_price, quantity,
-                is_day_trade=is_day_trade,
-            )
+            if _is_leveraged(market) and not mult_known:
+                unknown_multiplier_symbols.add(symbol)
+                fees = 0.0
+            else:
+                # 當沖判定:進出場同一交易日(與 Trade.is_day_trade 同義)。
+                # 台股當沖證交稅減半。
+                is_day_trade = entry_time.date() == exit_time.date()
+                fees = estimate_round_trip_cost(
+                    market, side, entry_price, exit_price, quantity,
+                    is_day_trade=is_day_trade,
+                    contract_multiplier=mult,
+                )
         fees = fees or 0.0
 
         trade = Trade(
@@ -347,6 +357,7 @@ def load_trades(
             fees=fees,
             pnl=pnl,  # 若為 None,Trade.__post_init__ 會用價格推算(已含 fees)
             tag=tag,
+            contract_multiplier=mult,
         )
         trades.append(trade)
 
@@ -362,6 +373,12 @@ def load_trades(
     if skip_ratio > 0.2:
         warn = f", ⚠️略過比例 {skip_ratio:.0%} 偏高(可能欄位對應有誤)"
     lot_note = ", 數量以『張』×1000 換算為股" if qty_in_lots else ""
+    if unknown_multiplier_symbols:
+        syms = ", ".join(sorted(unknown_multiplier_symbols)[:3])
+        warn += (
+            f", ⚠️{syms} 為槓桿商品但查不到契約乘數 —— 已跳過成本估算,"
+            "請自行在 fees 欄位填入實際費用(本工具拒絕用猜測的乘數算錯數字)"
+        )
 
     return TradeLog(
         trades=trades,

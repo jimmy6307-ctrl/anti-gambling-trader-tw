@@ -16,9 +16,13 @@ from typing import Optional
 class Market(str, Enum):
     """市場別。不同市場的交易成本與單位慣例不同。"""
 
-    TW_STOCK = "tw_stock"      # 台灣股市
-    US_STOCK = "us_stock"      # 美國股市
-    CRYPTO = "crypto"          # 加密貨幣
+    TW_STOCK = "tw_stock"        # 台灣股市
+    TW_ETF = "tw_etf"            # 台股 ETF(證交稅 0.1%,非 0.3%)
+    US_STOCK = "us_stock"        # 美國股市
+    CRYPTO = "crypto"            # 加密貨幣
+    TW_FUTURES = "tw_futures"    # 台指期等(單位「口」,有契約乘數)
+    TW_OPTIONS = "tw_options"    # 台指選擇權(權利金 × 乘數)
+    FOREX = "forex"              # 外匯 / 差價合約
     UNKNOWN = "unknown"
 
 
@@ -44,10 +48,14 @@ class Trade:
         exit_time:    出場時間
         entry_price:  進場價(每單位)
         exit_price:   出場價(每單位)
-        quantity:     數量(股數 / 張數 / 幣數)
+        quantity:     數量(股數 / 口數 / 幣數)
         fees:         此筆交易的總成本(手續費 + 稅 + 滑價),已知則填,未知留 0
         pnl:          盈虧金額。若提供則直接採用;否則由價格與數量推算
         tag:          使用者自訂的策略標籤(如 "突破", "均線多頭"),用於反推交易邏輯
+        contract_multiplier:
+                      契約乘數。股票 / 加密貨幣為 1.0;台指期 200、小台 50、
+                      台指選擇權 50。**不乘這個數字,期貨損益會少算 200 倍。**
+                      預設 1.0,因此舊有的股票 / 加密貨幣資料行為完全不變。
     """
 
     symbol: str
@@ -61,11 +69,17 @@ class Trade:
     fees: float = 0.0
     pnl: Optional[float] = None
     tag: Optional[str] = None
+    contract_multiplier: float = 1.0
 
     def __post_init__(self) -> None:
         # 若使用者沒提供 pnl,就用價格推算。做多與做空的方向相反。
+        # 契約乘數必須納入 —— 否則台指期(乘數 200)的損益會少算 200 倍。
         if self.pnl is None:
-            gross = (self.exit_price - self.entry_price) * self.quantity
+            gross = (
+                (self.exit_price - self.entry_price)
+                * self.quantity
+                * self.contract_multiplier
+            )
             if self.side == Side.SHORT:
                 gross = -gross
             self.pnl = gross - self.fees
@@ -76,12 +90,23 @@ class Trade:
         return (self.pnl or 0.0) > 0
 
     @property
+    def contract_value(self) -> float:
+        """進場時的契約價值(股票即市值;期貨為 價格 × 乘數 × 口數)。"""
+        return abs(self.entry_price * self.quantity * self.contract_multiplier)
+
+    @property
     def return_pct(self) -> float:
-        """報酬率(相對於進場投入的本金)。用於 R-multiple 與風險衡量。"""
-        cost_basis = abs(self.entry_price * self.quantity)
-        if cost_basis == 0:
+        """報酬率(相對於進場的契約價值)。
+
+        注意:槓桿商品(期貨/選擇權/外匯)的母體是「契約價值」而非「保證金」。
+        以保證金為母體算出的報酬率會高出數十倍,兩者不可互相比較。
+        我們刻意選擇契約價值 —— 因為保證金比例因券商與帳戶而異,
+        憑空假設一個比例就是假精準。
+        """
+        basis = self.contract_value
+        if basis == 0:
             return 0.0
-        return (self.pnl or 0.0) / cost_basis
+        return (self.pnl or 0.0) / basis
 
     @property
     def holding_days(self) -> float:

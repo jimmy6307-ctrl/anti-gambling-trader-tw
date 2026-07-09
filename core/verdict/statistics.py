@@ -261,3 +261,67 @@ def _z_from_power(power: float) -> float:
         else:
             hi = mid
     return (lo + hi) / 2
+
+
+@dataclass
+class TwoSampleResult:
+    """兩獨立樣本『平均值是否不同』的 Welch 檢定結果(雙尾)。
+
+    專用於「早期 vs 近期」這種**單一、事先指定**的比較。
+    刻意不提供「掃描多個切點找最像衰退的那個」的介面 —— 那是資料探勘,
+    會把雜訊當成訊號(見 trend 模組與 strategy/per_tag 的多重比較說明)。
+    """
+
+    n1: int
+    n2: int
+    mean1: float
+    mean2: float
+    diff: float                  # mean1 - mean2
+    t_stat: float
+    df: float                    # Welch–Satterthwaite 自由度
+    p_value: float               # 雙尾 p 值(H0: 兩者平均相等)
+    is_significant: bool         # 在給定 alpha 下是否顯著不同
+
+
+def welch_mean_test(
+    a: list[float], b: list[float], *, alpha: float = 0.05
+) -> TwoSampleResult | None:
+    """Welch 兩樣本 t 檢定(不假設等變異),雙尾檢定兩組平均是否不同。
+
+    回傳 None 表示無法檢定(任一組樣本 < 2,或兩組變異都為 0)。
+
+    設計為**雙尾**而非單尾:因為使用者的問題是「我在進步還是退步?」——
+    方向未知,不該預設只找「退步」。方向由呼叫端依 diff 的正負描述,
+    但顯著與否只做一次對稱的檢定,避免『兩個方向各測一次』變相 p-hacking。
+    """
+    n1, n2 = len(a), len(b)
+    if n1 < 2 or n2 < 2:
+        return None
+    m1 = sum(a) / n1
+    m2 = sum(b) / n2
+    v1 = sum((x - m1) ** 2 for x in a) / (n1 - 1)
+    v2 = sum((x - m2) ** 2 for x in b) / (n2 - 1)
+    se2 = v1 / n1 + v2 / n2
+    if se2 <= 0:
+        # 兩組內部都零變異:平均相同→不顯著;不同→視為確定不同
+        diff = m1 - m2
+        return TwoSampleResult(
+            n1, n2, m1, m2, diff,
+            t_stat=0.0 if diff == 0 else math.copysign(math.inf, diff),
+            df=float(n1 + n2 - 2),
+            p_value=1.0 if diff == 0 else 0.0,
+            is_significant=diff != 0,
+        )
+    se = math.sqrt(se2)
+    t = (m1 - m2) / se
+    # Welch–Satterthwaite 自由度
+    df = se2 ** 2 / (
+        (v1 / n1) ** 2 / (n1 - 1) + (v2 / n2) ** 2 / (n2 - 1)
+    )
+    # 雙尾 p:單尾存活函數對稱處理
+    p = 2.0 * _student_t_sf(abs(t), df)
+    p = min(1.0, max(0.0, p))
+    return TwoSampleResult(
+        n1=n1, n2=n2, mean1=m1, mean2=m2, diff=m1 - m2,
+        t_stat=t, df=df, p_value=p, is_significant=p < alpha,
+    )

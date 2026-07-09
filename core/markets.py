@@ -1,0 +1,175 @@
+"""市場與商品規格 — 契約乘數、辨識規則、槓桿標註。
+
+為什麼需要這個模組:
+
+    台指期一口的契約乘數是 200(小台 50、選擇權 50)。如果不乘這個數字,
+    一口台指期漲 10 點,損益會被算成 10 元而不是 2000 元 —— **少算 200 倍**。
+    這個錯誤會靜默地汙染下游所有東西:期望值、回撤、顯著性檢定、趨勢、夏普值。
+
+    乘數無法從代號或價位可靠反推(同樣是「台指」,大台 200、小台 50;
+    不同券商、不同帳戶別也可能不同)。所以本模組採**白名單**:
+    查得到就用,查不到就標記 multiplier_unknown 並拒絕自動估算成本,
+    而不是猜一個數字。寧可不算,不可算錯。
+
+誠實聲明:所有費率都是 2026 年的常見估計值,會隨主管機關與券商調整。
+請以你的實際對帳單為準。
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from .models import Market
+
+#: 本檔費率的最後查核日期(提醒使用者資訊會過時)
+LAST_REVIEWED = "2026-07"
+
+
+@dataclass(frozen=True)
+class MarketSpec:
+    """單一市場的商品規格。"""
+
+    market: Market
+    unit_name: str            # 數量的單位名稱(股 / 口 / 張 / 幣)
+    is_leveraged: bool        # 是否為槓桿商品(影響 return_pct 與夏普的可比性)
+    default_multiplier: float # 找不到白名單時的預設乘數
+    note: str = ""
+
+
+MARKET_SPECS: dict[Market, MarketSpec] = {
+    Market.TW_STOCK: MarketSpec(Market.TW_STOCK, "股", False, 1.0),
+    Market.TW_ETF: MarketSpec(Market.TW_ETF, "股", False, 1.0,
+                              "股票型 ETF 證交稅 0.1%(非 0.3%)"),
+    Market.US_STOCK: MarketSpec(Market.US_STOCK, "股", False, 1.0),
+    Market.CRYPTO: MarketSpec(Market.CRYPTO, "幣", False, 1.0,
+                              "永續合約有資金費率,本工具未建模"),
+    Market.TW_FUTURES: MarketSpec(Market.TW_FUTURES, "口", True, 1.0,
+                                  "乘數必須查白名單;查不到不可自動估成本"),
+    Market.TW_OPTIONS: MarketSpec(Market.TW_OPTIONS, "口", True, 1.0,
+                                  "賣方風險左尾極厚,樣本內可能完全看不到爆倉"),
+    Market.FOREX: MarketSpec(Market.FOREX, "手", True, 1.0,
+                             "隔夜利息(swap)可正可負,本工具未建模"),
+    Market.UNKNOWN: MarketSpec(Market.UNKNOWN, "單位", False, 1.0),
+}
+
+
+# ── 契約乘數白名單 ────────────────────────────────────────────
+# 只放我們有把握的。查不到就是查不到,不猜。
+SYMBOL_MULTIPLIERS: dict[str, float] = {
+    # 台灣期貨(台指期系列)
+    "TXF": 200.0,   # 大台
+    "MXF": 50.0,    # 小台
+    "TMF": 10.0,    # 微台
+    "EXF": 4000.0,  # 電子期
+    "FXF": 1000.0,  # 金融期
+    # 台灣選擇權(權利金點數 × 50)
+    "TXO": 50.0,
+}
+
+# ISO 4217 主要貨幣(用於辨識外匯代號如 EURUSD)
+ISO_CCY = frozenset({
+    "USD", "EUR", "JPY", "GBP", "AUD", "NZD", "CAD", "CHF",
+    "CNY", "CNH", "HKD", "SGD", "TWD", "KRW", "SEK", "NOK",
+    "MXN", "ZAR", "TRY", "PLN",
+})
+
+# 加密貨幣的計價幣(用於區分 BTCUSDT 這種代號)
+_CRYPTO_QUOTE = re.compile(r"(USDT|USDC|BUSD|DAI)$", re.IGNORECASE)
+_CRYPTO_BASE = re.compile(r"^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB)", re.IGNORECASE)
+
+_FOREX_PAIR = re.compile(r"^([A-Z]{3})([A-Z]{3})$")
+_TW_ETF = re.compile(r"^00\d{2,4}[A-Z]?$")      # 0050, 0056, 00878...
+_TW_STOCK = re.compile(r"^\d{4,6}[A-Z]?$")
+_US_STOCK = re.compile(r"^[A-Z]{1,5}$")
+
+
+def contract_multiplier(symbol: str) -> tuple[float, bool]:
+    """查契約乘數。
+
+    Returns:
+        (乘數, 是否查得到)。查不到時回 (1.0, False) —— 呼叫端應標記
+        multiplier_unknown 並拒絕對槓桿商品自動估算成本。
+    """
+    s = str(symbol).strip().upper()
+    for prefix, mult in SYMBOL_MULTIPLIERS.items():
+        if s.startswith(prefix):
+            return mult, True
+    return 1.0, False
+
+
+def infer_market(symbol: str, hint: Market | None = None) -> Market:
+    """從標的代號推斷市場別。
+
+    辨識順序很重要 —— 修正了一個真實 bug:舊版的加密貨幣規則是
+    「以 USD 結尾」,會把 EURUSD / GBPUSD / AUDUSD 這些**外匯**代號
+    誤判成加密貨幣,導致套用完全錯誤的成本模型。
+
+    模稜兩可時一律回 UNKNOWN(寧可不判,不可錯判)。
+    """
+    if hint and hint != Market.UNKNOWN:
+        return hint
+    s = str(symbol).strip().upper()
+    if not s:
+        return Market.UNKNOWN
+
+    # 1. 期貨 / 選擇權(白名單前綴,最明確)
+    for prefix in SYMBOL_MULTIPLIERS:
+        if s.startswith(prefix):
+            return Market.TW_OPTIONS if prefix.endswith("O") else Market.TW_FUTURES
+
+    # 2. 外匯:六碼且前三後三都是 ISO 貨幣(必須早於加密貨幣判斷)
+    m = _FOREX_PAIR.match(s)
+    if m and m.group(1) in ISO_CCY and m.group(2) in ISO_CCY:
+        return Market.FOREX
+
+    # 3. 加密貨幣:明確的計價幣後綴,或已知的主流幣前綴
+    if _CRYPTO_QUOTE.search(s) or _CRYPTO_BASE.match(s):
+        return Market.CRYPTO
+
+    # 4. 台股 ETF(00 開頭)→ 5. 台股 → 6. 美股
+    if _TW_ETF.match(s):
+        return Market.TW_ETF
+    if _TW_STOCK.match(s):
+        return Market.TW_STOCK
+    if _US_STOCK.match(s):
+        return Market.US_STOCK
+
+    return Market.UNKNOWN
+
+
+def is_leveraged(market: Market) -> bool:
+    """槓桿商品:報酬率與夏普值不可跨商品比較(母體定義不同)。"""
+    spec = MARKET_SPECS.get(market)
+    return bool(spec and spec.is_leveraged)
+
+
+def unit_name(market: Market) -> str:
+    spec = MARKET_SPECS.get(market)
+    return spec.unit_name if spec else "單位"
+
+
+def uncovered_cost_warnings(market: Market) -> list[str]:
+    """本工具「未涵蓋」的成本 —— 必須誠實告訴使用者。"""
+    out: list[str] = []
+    if market == Market.FOREX:
+        out.append(
+            "外匯的隔夜利息(swap)可正可負、逐日浮動、各券商加價不一,"
+            "本工具未建模。請以對帳單的實際費用填入 fees 欄位。"
+        )
+    if market == Market.CRYPTO:
+        out.append(
+            "加密貨幣永續合約的資金費率(funding rate)未建模。"
+            "若你做的是永續合約,請把資金費用計入 fees。"
+        )
+    if market in (Market.TW_FUTURES, Market.TW_OPTIONS):
+        out.append(
+            "期貨/選擇權的保證金追繳、強制平倉未建模;報酬率以契約價值為母體計算,"
+            "與以保證金為母體的算法差距可達數十倍,不可與股票的報酬率直接比較。"
+        )
+    if market == Market.TW_OPTIONS:
+        out.append(
+            "⚠️ 選擇權賣方的虧損左尾極厚:歷史樣本裡「剛好沒發生爆倉」時,"
+            "統計檢定會誤判為穩定獲利。顯著為正的結果對賣方策略特別不可信。"
+        )
+    return out

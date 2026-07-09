@@ -63,6 +63,13 @@ class ScamCheckResult:
 
     @property
     def risk_pct(self) -> float:
+        """僅供內部門檻判斷用,**不可對使用者呈現為百分比**。
+
+        這個比例是「命中權重 / 總權重」,權重是我們自己訂的,
+        沒有經過任何標註語料的校準。把它印成「你有 48% 的機率遇到詐騙」
+        是假精準 —— 那個數字不對應任何真實機率,正是本工具譴責的偽科學。
+        對外一律只呈現序數等級(極高 / 高 / 中 / 低)。
+        """
         return self.score / self.max_score if self.max_score else 0.0
 
 
@@ -139,8 +146,11 @@ def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult:
 
     output_fn("")
     output_fn("=" * 60)
-    output_fn(f"  風險評分:{result.score}/{result.max_score}"
-              f"({result.risk_pct:.0%})  風險等級:{result.risk_level}")
+    # 只呈現「命中幾項 / 共幾項」的事實與序數等級。
+    # 不印百分比 —— 那個數字沒有經過校準,不對應任何真實機率(假精準)。
+    n_hit = sum(1 for it in CHECK_ITEMS if answers.get(it.key))
+    output_fn(f"  命中 {n_hit} / {len(CHECK_ITEMS)} 項詐騙特徵"
+              f"  風險等級:{result.risk_level}")
     output_fn(f"  {result.headline}")
     output_fn("=" * 60)
     if result.advice:
