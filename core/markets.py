@@ -67,6 +67,14 @@ SYMBOL_MULTIPLIERS: dict[str, float] = {
     "TXO": 50.0,
 }
 
+# 台灣期貨/選擇權代號 = 白名單前綴 + 契約月份碼(必須含數字)。
+# 例:TXFG5(月份碼 G + 年碼 5)、TXF202607(年月)、TXO18000G5(履約價 + 月份碼)。
+# 「必須含數字」是關鍵防線:TMF / FXF / TXO 都是真實美股代號(純字母),
+# 裸前綴比對會把它們誤判成台期,損益錯 10~4000 倍。
+_TW_DERIV_PATTERN = re.compile(
+    r"^(" + "|".join(sorted(SYMBOL_MULTIPLIERS, key=len, reverse=True)) + r")(?=[A-Z0-9]*\d)"
+)
+
 # ISO 4217 主要貨幣(用於辨識外匯代號如 EURUSD)
 ISO_CCY = frozenset({
     "USD", "EUR", "JPY", "GBP", "AUD", "NZD", "CAD", "CHF",
@@ -92,9 +100,9 @@ def contract_multiplier(symbol: str) -> tuple[float, bool]:
         multiplier_unknown 並拒絕對槓桿商品自動估算成本。
     """
     s = str(symbol).strip().upper()
-    for prefix, mult in SYMBOL_MULTIPLIERS.items():
-        if s.startswith(prefix):
-            return mult, True
+    m = _TW_DERIV_PATTERN.match(s)
+    if m:
+        return SYMBOL_MULTIPLIERS[m.group(1)], True
     return 1.0, False
 
 
@@ -113,10 +121,15 @@ def infer_market(symbol: str, hint: Market | None = None) -> Market:
     if not s:
         return Market.UNKNOWN
 
-    # 1. 期貨 / 選擇權(白名單前綴,最明確)
-    for prefix in SYMBOL_MULTIPLIERS:
-        if s.startswith(prefix):
-            return Market.TW_OPTIONS if prefix.endswith("O") else Market.TW_FUTURES
+    # 1. 期貨 / 選擇權:白名單前綴 + 必須帶契約月份碼。
+    #    不可用裸 startswith —— TMF(美股 3 倍做多公債 ETF)、FXF(瑞郎 ETF)、
+    #    TXO(TXO Partners, NYSE)都是**真實存在的美股代號**,裸前綴比對會把
+    #    美股使用者的損益放大 10~4000 倍。真實台期代號一定帶月份碼
+    #    (如 TXFG5、TXF202607),裸三字母代號一律不視為期貨。
+    m_deriv = _TW_DERIV_PATTERN.match(s)
+    if m_deriv:
+        prefix = m_deriv.group(1)
+        return Market.TW_OPTIONS if prefix.endswith("O") else Market.TW_FUTURES
 
     # 2. 外匯:六碼且前三後三都是 ISO 貨幣(必須早於加密貨幣判斷)
     m = _FOREX_PAIR.match(s)

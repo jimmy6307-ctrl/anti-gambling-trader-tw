@@ -15,7 +15,6 @@ from typing import Any, Iterable, Optional
 
 from ..markets import contract_multiplier as _contract_multiplier
 from ..markets import infer_market as _infer_market
-from ..markets import is_leveraged as _is_leveraged
 from ..models import Market, Side, Trade, TradeLog
 from .costs import estimate_round_trip_cost
 
@@ -123,7 +122,7 @@ def _parse_side(value: Any) -> Side:
 
 def _parse_time(value: Any) -> datetime:
     if isinstance(value, datetime):
-        return value
+        return _naive(value)
     s = str(value).strip()
     # 嘗試多種常見格式
     formats = [
@@ -138,9 +137,19 @@ def _parse_time(value: Any) -> datetime:
             continue
     # 最後嘗試 ISO 格式(含時區)
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return _naive(datetime.fromisoformat(s.replace("Z", "+00:00")))
     except ValueError as exc:
         raise ValueError(f"無法解析時間格式: {value!r}") from exc
+
+
+def _naive(dt: datetime) -> datetime:
+    """統一去除時區資訊(保留掛鐘時間)。
+
+    同一份檔案若混有帶時區(ISO 格式)與不帶時區的時間,
+    aware 與 naive datetime **不能互相比較** —— 排序、當沖判定、
+    月份分桶會直接 TypeError 崩潰。統一轉 naive 保證可比較。
+    """
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
 def _to_float(value: Any, default: float | None = None) -> float | None:
@@ -328,10 +337,11 @@ def load_trades(
         tag = str(tag).strip() if tag not in (None, "") else None
 
         # 成本處理:使用者沒給 fees 且開啟自動估算時,補上估計成本。
-        # 但槓桿商品若乘數未知,拒絕自動估算(寧可 fees=0 讓使用者自己填,
-        # 也不要用錯誤的乘數算出錯 200 倍的成本)。
+        # 「乘數未知就拒絕估算」只適用於**乘數真正必要**的台期/選擇權 ——
+        # FOREX 的 is_leveraged 是「報酬率不可比」的標註,其乘數本應為 1
+        # (口數已含在 quantity),若一併拒絕會讓外匯永遠估不到成本。
         if fees is None and auto_estimate_costs and entry_price and quantity:
-            if _is_leveraged(market) and not mult_known:
+            if market in (Market.TW_FUTURES, Market.TW_OPTIONS) and not mult_known:
                 unknown_multiplier_symbols.add(symbol)
                 fees = 0.0
             else:

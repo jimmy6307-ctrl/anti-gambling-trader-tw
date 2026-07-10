@@ -70,6 +70,9 @@ class RuinScenario:
     losing_streak_10_prob: float   # 未來出現連虧 10 次的機率
 
     warnings: list[str] = field(default_factory=list)
+    # 起始權益是否為工具粗估(而非使用者提供)。爆倉比例對這個假設極度敏感:
+    # 本金假設砍半,爆倉比例可能從 5% 跳到 90%。推估時必須醒目揭露。
+    start_equity_inferred: bool = False
 
     def as_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -98,10 +101,20 @@ def simulate_ruin_scenario(
     Returns:
         RuinScenario;樣本 < 10 筆時回傳 None(誠實地不編數字)。
     """
+    # 參數驗證:越界的參數會產生無意義的模擬,直接拒絕並講清楚,
+    # 而不是默默算出垃圾數字。
+    if n_paths < 1 or n_future_trades < 1:
+        raise ValueError("n_paths 與 n_future_trades 必須 >= 1")
+    if not (0.0 <= ruin_drawdown <= 1.0):
+        raise ValueError(f"ruin_drawdown 必須在 [0, 1],收到 {ruin_drawdown}")
+    if start_equity is not None and start_equity <= 0:
+        raise ValueError(f"start_equity 必須 > 0,收到 {start_equity}")
+
     n = len(pnls)
     if n < 10:
         return None
 
+    equity_inferred = start_equity is None
     if start_equity is None:
         worst = abs(min(pnls)) if min(pnls) < 0 else abs(max(pnls))
         start_equity = max(worst * 20.0, 1.0)
@@ -144,11 +157,20 @@ def simulate_ruin_scenario(
         idx = min(len(sorted_vals) - 1, max(0, int(pct * len(sorted_vals))))
         return sorted_vals[idx]
 
-    wins = sum(1 for p in pnls if p > 0)
-    win_rate = wins / n
-    streak10 = losing_streak_probability(n_future_trades, 10, win_rate)
+    # 連虧機率要用「真實的虧損率」:打平交易(pnl == 0)既不是贏也不是虧,
+    # 用 1 − win_rate 會把打平算成虧損,高估連虧機率。
+    losses = sum(1 for p in pnls if p < 0)
+    streak10 = losing_streak_probability(n_future_trades, 10, 1.0 - losses / n)
 
-    warnings = [
+    warnings = []
+    if equity_inferred:
+        # 放最前面:爆倉比例對本金假設極度敏感,推估的本金必須第一眼看到。
+        warnings.append(
+            f"⚠️ 起始權益 {start_equity:,.0f} 是工具用『單筆最大虧損 × 20』**粗估的假設本金**,"
+            "不是你的真實帳戶。爆倉比例對這個假設極度敏感 —— 請用 --equity 提供"
+            "真實權益重跑,結果可能天差地遠。"
+        )
+    warnings += [
         "這**不是預測**。它假設「未來每一筆交易的損益,都從你過去的損益裡隨機抽出」——"
         "而未來必然不會如此。市場會變。",
         f"⚠️ 尾端低估:重抽只能抽到你樣本裡**出現過**的損益。你只有 {n} 筆樣本,"
@@ -174,6 +196,7 @@ def simulate_ruin_scenario(
         median_trade_at_ruin=(ruin_steps[len(ruin_steps) // 2] if ruin_steps else None),
         losing_streak_10_prob=streak10,
         warnings=warnings,
+        start_equity_inferred=equity_inferred,
     )
 
 
@@ -181,7 +204,8 @@ def render_scenario(s: RuinScenario) -> str:
     """輸出可讀報告。刻意用「情境」而非「預測」的措辭。"""
     L = ["=" * 66, "        風險情境模擬 — 如果未來長得像過去,會怎樣?", "=" * 66, ""]
     L.append(f"【設定】模擬未來 {s.n_future_trades} 筆交易,跑 {s.n_paths:,} 條路徑")
-    L.append(f"       起始權益 {s.start_equity:,.0f},"
+    inferred_tag = "(⚠️ 工具粗估,非真實帳戶)" if s.start_equity_inferred else ""
+    L.append(f"       起始權益 {s.start_equity:,.0f}{inferred_tag},"
              f"跌破 {s.ruin_threshold:,.0f} 視為爆掉")
     L.append("")
     L.append("【情境結果】")

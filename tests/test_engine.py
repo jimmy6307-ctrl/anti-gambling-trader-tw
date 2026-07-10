@@ -108,9 +108,12 @@ def test_infer_market():
     # 回歸測試:外匯不得被誤判為加密貨幣(舊版因「以 USD 結尾」而誤判)
     assert infer_market("EURUSD") == Market.FOREX
     assert infer_market("GBPUSD") == Market.FOREX
-    # 期貨 / 選擇權
-    assert infer_market("TXF") == Market.TW_FUTURES
-    assert infer_market("TXO") == Market.TW_OPTIONS
+    # 期貨 / 選擇權:必須帶契約月份碼(裸 TXO/TMF/FXF 是真實美股代號)
+    assert infer_market("TXFG5") == Market.TW_FUTURES
+    assert infer_market("TXO18000G5") == Market.TW_OPTIONS
+    assert infer_market("TXO") == Market.US_STOCK   # TXO Partners(NYSE)
+    assert infer_market("TMF") == Market.US_STOCK   # Direxion 公債 3x ETF
+    assert infer_market("FXF") == Market.US_STOCK   # 瑞郎 ETF
 
 
 # ── breakeven 進階分支 ─────────────────────────────────────

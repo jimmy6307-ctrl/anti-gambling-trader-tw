@@ -26,7 +26,7 @@ from ..survivorship import (
     prob_perfect_run,
     prob_streak_in_trials,
 )
-from ..verdict.statistics import required_sample_size
+from ..verdict.statistics import _reg_incomplete_beta, required_sample_size
 
 #: 全球一年的 GDP 概略值(台幣),用於複利歸謬法的參考錨點
 WORLD_GDP_TWD = 3.5e15
@@ -37,6 +37,11 @@ def binomial_tail_ge(n: int, k: int, p: float) -> float:
 
     用於檢驗「宣稱的勝率」:在毫無能力(每次贏的機率 = p)的前提下,
     n 次交易裡贏 k 次以上的機率有多大。
+
+    實作用恆等式 P(X >= k) = I_p(k, n − k + 1)(正則化不完全 beta),
+    複用 verdict/statistics 已驗證的 _reg_incomplete_beta。
+    舊版逐項累加 math.comb(n, i) 在 n = 10000 時會 OverflowError
+    (巨大整數無法轉 float)—— 老師宣稱「一萬筆交易勝率 90%」會讓工具直接崩潰。
     """
     if k <= 0:
         return 1.0
@@ -46,9 +51,7 @@ def binomial_tail_ge(n: int, k: int, p: float) -> float:
         return 0.0
     if p >= 1.0:
         return 1.0
-    total = 0.0
-    for i in range(k, n + 1):
-        total += math.comb(n, i) * (p ** i) * ((1 - p) ** (n - i))
+    total = _reg_incomplete_beta(p, float(k), float(n - k + 1))
     return min(1.0, max(0.0, total))
 
 

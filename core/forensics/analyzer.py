@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .stat_tests import (
@@ -100,6 +101,12 @@ def analyze_returns(
         returns:          報酬序列(0.02 = 2%)。至少要 8 期才做得了檢定。
         periods_per_year: 一年幾期(月報酬 = 12,週 = 52,日 = 252)
     """
+    # 非有限值(NaN / inf)防護:NaN 會讓所有比較悄悄為 False、汙染均值與變異,
+    # 產出看似正常實則錯誤的鑑識結果。直接剔除並記錄,不讓它汙染統計。
+    clean = [r for r in returns if isinstance(r, (int, float)) and math.isfinite(r)]
+    n_dropped = len(returns) - len(clean)
+    returns = clean
+
     n = len(returns)
     if n == 0:
         return ReturnsForensics(0, 0.0, 0.0, 0.0, suspicion_level="資訊不足")
@@ -120,8 +127,10 @@ def analyze_returns(
         runs=runs_test(returns),
         autocorr_lag1=lag1_autocorr(returns),
         sharpe=sharpe_with_ci(returns, periods_per_year=periods_per_year),
-        terminal_digits=terminal_digit_test(returns),
-        round_number_ratio=_round_number_ratio(returns),
+        # 尾數檢定用 decimals=4:報酬如 0.0095(=0.95%)在 decimals=2 下
+        # 「最後一位」全是 0,檢定的是量級而非尾數偏好,毫無意義。
+        terminal_digits=terminal_digit_test(returns, decimals=4),
+        round_number_ratio=_round_number_ratio(returns, decimals=4),
     )
 
     findings: list[Finding] = []
@@ -182,25 +191,38 @@ def analyze_returns(
                     "**不代表造假,也不代表不可能。** 高頻做市、統計套利的合法策略"
                     "也可能有高夏普。而且若報酬被平滑化,這個夏普值本身就被高估了 —— "
                     "此時真實的不確定性比上面的信賴區間更大。"
+                    "(註:此處的「> 3」是實務經驗法則的參考門檻,不是統計檢定的臨界值;"
+                    "其意義也隨報酬頻率而變。信賴區間用 Lo (2002) 的 i.i.d. 近似 SE,"
+                    "報酬有自相關時會低估不確定性。)"
                 ),
                 ask="這個夏普是用什麼期間、什麼資產、扣除多少費用後算的?能否提供逐筆紀錄?",
             ))
 
-    # ── 4. 尾數分布偏離均勻:可疑但解釋很多 ──
-    if f.terminal_digits and f.terminal_digits.p_value < 0.01:
+    # ── 4. 尾數分布:**降為純描述,不再作為可疑旗標**。
+    #    理由(對抗驗證結論):尾數是否有意義,取決於資料的量化精度
+    #    (四捨五入位數、tick size)—— 我們無從得知,任何門檻都是拍腦袋。
+    #    數字仍保留在 terminal_digits 欄位供進階使用者自行判讀,
+    #    但不計入可疑程度(與 round_number_ratio 同一待遇)。
+
+    # ── 4b. 零波動 / 極低波動:最露骨的偽造樣態,卻是其他檢定的盲區 ──
+    #    報酬完全恆定時,runs test(全同號)與夏普(變異為 0)都回 None,
+    #    等於「最假的資料反而一項檢定都跑不了」。必須明確補上這一項。
+    if n >= 12 and (vol == 0.0 or (mean != 0 and vol / abs(mean) < 0.02)):
         findings.append(Finding(
-            code="terminal_digit_anomaly",
-            severity="low",
+            code="zero_volatility",
+            severity="high",
             what=(
-                f"報酬數字的最後一位不像均勻分布"
-                f"(卡方 {f.terminal_digits.chi2:.1f},p={f.terminal_digits.p_value:.2e})。"
+                f"{n} 期報酬幾乎完全一樣(波動度 {vol:.4%},平均 {mean:.2%})。"
             ),
-            means="捏造的數字常在尾數上留下偏好的痕跡。",
+            means=(
+                "真實市場的報酬不可能期期近乎恆定。「每月固定 X%」是龐氏騙局"
+                "最典型的樣態 —— 因為那個數字不是市場給的,是人填的。"
+            ),
             does_not_mean=(
-                "**很可能只是四捨五入或報價慣例。** 最小跳動點(tick size)、"
-                "只公布到小數第一位等,都會造成尾數偏離均勻。這項單獨看幾乎沒有證據力。"
+                "**不代表必然造假。** 定存、貨幣基金的報酬也近乎恆定 —— "
+                "但那樣的年化報酬只有 1~5%。恆定又高報酬,才是矛盾所在。"
             ),
-            ask="這些數字是原始資料還是被四捨五入過?小數位數是怎麼決定的?",
+            ask="這個報酬是投資績效還是『承諾配息』?錢實際投到哪裡?能否第三方查證?",
         ))
 
     # ── 5. 月月正報酬:描述性事實(最有力的追問切入點)──

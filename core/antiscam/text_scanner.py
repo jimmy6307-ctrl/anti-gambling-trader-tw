@@ -23,9 +23,15 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from .patterns import SCAM_PATTERNS, ScamPattern, find_pattern
+
+# 零寬字元(U+200B/200C/200D、BOM、word joiner):詐騙文案可夾在關鍵字中間規避比對
+_ZERO_WIDTH = re.compile(r"[​‌‍⁠﻿]")
+
+_SENTENCE_DELIM = re.compile(r"[。!?!?\n；;]+")
 
 # ── 話術詞庫:(片語, 對應的詐騙型態代碼, 權重) ────────────────
 # 權重 3 = 近乎鐵證的詐騙用語;2 = 強烈可疑;1 = 需搭配其他訊號
@@ -157,8 +163,33 @@ class TextScanResult:
 
 
 def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r"[。!?!?\n；;]+", text)
+    parts = _SENTENCE_DELIM.split(text)
     return [p.strip() for p in parts if p.strip()]
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """回傳每個句子的 (start, end) 位置區間,用於把命中位置對回正確的句子。
+
+    舊版用「第一個含該片語的句子」,當同一片語出現多次時會對錯句子,
+    導致警示語境判定用錯上下文。
+    """
+    spans: list[tuple[int, int]] = []
+    last = 0
+    for m in _SENTENCE_DELIM.finditer(text):
+        if m.start() > last:
+            spans.append((last, m.start()))
+        last = m.end()
+    if last < len(text):
+        spans.append((last, len(text)))
+    return spans
+
+
+def _sentence_at(spans: list[tuple[int, int]], text: str, pos: int) -> str:
+    """取出位置 pos 所在的句子(小寫文本)。"""
+    for a, b in spans:
+        if a <= pos < b:
+            return text[a:b].strip()
+    return text[max(0, pos - 20):pos + 20]
 
 
 def _strip_self_denial(s: str) -> str:
@@ -203,8 +234,14 @@ def scan_text(text: str) -> TextScanResult:
             headline="文字太短,無法判斷。請貼上完整的對話或文案。",
         )
 
-    lower = raw.lower()
-    sentences = _split_sentences(raw)
+    # ── 正規化(防規避):純標準庫,零依賴 ──
+    # (a) NFKC:全形拉丁字母/數字/標點 → 半形(「ＶＩＰ」→「vip」、「保　證」的全形空白)
+    # (b) 移除零寬字元:詐騙文案可在關鍵字中間夾 U+200B 等,肉眼看不出、比對卻失效
+    norm = unicodedata.normalize("NFKC", raw)
+    norm = _ZERO_WIDTH.sub("", norm)
+    lower = norm.lower()
+    sentences = _split_sentences(norm)
+    sentence_spans = _sentence_spans(lower)
 
     # 討論守門:先剔除「我們不是詐騙」這類自我否認,免得詐騙犯用它觸發降級
     lower_clean = _strip_self_denial(lower)
@@ -217,13 +254,22 @@ def scan_text(text: str) -> TextScanResult:
     ]
 
     for phrase, category, weight in all_terms:
+        # 掃描「所有」出現位置,不能只看第一個就 break:
+        # 攻擊情境:「保證獲利?都是騙人的…不,我們真的保證獲利!」——
+        # 第一次出現在警示語境會被排除,若就此 break,第二次真正的話術會漏抓。
+        # 只要有任何一個 occurrence 不在警示語境,就算一次有效命中(仍只計一次分)。
+        best_hit: Hit | None = None
         for m in re.finditer(re.escape(phrase.lower()), lower):
-            # 找出這個命中所在的句子(用於逐句標註與語境判定)
-            sent = next((s for s in sentences if phrase.lower() in s.lower()), raw[:40])
-            neg = _is_warning_context(sent.lower(), lower, m.start(), m.end())
+            sent = _sentence_at(sentence_spans, lower, m.start())
+            neg = _is_warning_context(sent, lower, m.start(), m.end())
             h = Hit(phrase, category, weight, m.start(), neg, sent)
-            (negated if neg else hits).append(h)
-            break   # 同一片語只計一次(防複製貼上灌分)
+            if not neg:
+                best_hit = h
+                break            # 找到有效命中即可(同片語只計一次分)
+            if best_hit is None:
+                best_hit = h     # 暫存被否定的,若全部被否定就歸 negated
+        if best_hit is not None:
+            (negated if best_hit.negated else hits).append(best_hit)
 
     # 「我們不是詐騙」是 protesting too much —— 當作額外警訊,而非否定
     self_denial = _has_self_denial(lower)
@@ -240,7 +286,9 @@ def scan_text(text: str) -> TextScanResult:
     has_hard_evidence = any(w >= 3 for w in per_category_max.values())
 
     # ── 序數等級:主要看「命中幾種相異類別」,而非密度或總分 ──
-    if is_discussion and not has_hard_evidence:
+    # 討論守門的例外:即使有求證/提醒語境,若同時命中 3 種以上相異話術類別,
+    # 更可能是詐騙文案「夾帶」一句求證語來規避偵測 —— 不降級。
+    if is_discussion and not has_hard_evidence and distinct < 3:
         level = "低"
         headline = (
             "這段文字看起來像是在『討論或警告』詐騙,而不是詐騙本身。"

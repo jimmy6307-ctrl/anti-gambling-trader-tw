@@ -57,17 +57,27 @@ def test_forex_not_misclassified_as_crypto():
 def test_market_classification():
     assert infer_market("2330") == Market.TW_STOCK
     assert infer_market("0050") == Market.TW_ETF
-    assert infer_market("TXF") == Market.TW_FUTURES
-    assert infer_market("TXO") == Market.TW_OPTIONS
+    # 期貨/選擇權必須帶契約月份碼
+    assert infer_market("TXFG5") == Market.TW_FUTURES
+    assert infer_market("TXF202607") == Market.TW_FUTURES
+    assert infer_market("TXO18000G5") == Market.TW_OPTIONS
     assert infer_market("AAPL") == Market.US_STOCK
     assert infer_market("ZZZZZZ") == Market.UNKNOWN   # 模稜兩可 → 不猜
 
 
 def test_contract_multiplier_whitelist():
     assert contract_multiplier("TXF202607") == (200.0, True)
-    assert contract_multiplier("MXF") == (50.0, True)
+    assert contract_multiplier("MXFH5") == (50.0, True)
     # 查不到就是查不到,不猜
     assert contract_multiplier("2330") == (1.0, False)
+
+
+def test_real_us_tickers_not_hijacked_by_futures_prefix():
+    """回歸測試(gpt-5.5/grok-4.5 辯論發現):TMF/FXF/TXO/EXF 是真實美股代號,
+    裸前綴比對會把美股使用者的損益放大 10~4000 倍。"""
+    for s in ("TMF", "FXF", "TXO", "EXF"):
+        assert infer_market(s) == Market.US_STOCK, s
+        assert contract_multiplier(s) == (1.0, False), s
 
 
 def test_futures_pnl_uses_multiplier():
@@ -334,6 +344,116 @@ def test_share_card_renders():
     card = render_share_card(_sample_result())
     assert "不構成投資建議" in card
     assert len(card) > 500
+
+
+# ══════ 最強模型辯論(gpt-5.5 + grok-4.5 + opus4.8)修正的防退化測試 ══════
+def test_binomial_large_n_no_overflow():
+    """舊版 math.comb 逐項累加在 n=10000 直接 OverflowError 崩潰。"""
+    r = binomial_tail_ge(10000, 5500, 0.5)
+    assert 0.0 <= r <= 1e-20
+    r2 = binomial_tail_ge(1000000, 505000, 0.5)   # 一百萬筆也要能算
+    assert 0.0 <= r2 <= 1.0
+
+
+def test_drawdown_capital_base_uses_multiplier():
+    """回撤資本基準必須含契約乘數,否則期貨的回撤 % 錯 200 倍。"""
+    from core.metrics.performance import compute_metrics
+    d = datetime(2025, 1, 2)
+    trades = [
+        Trade("TXFG5", Market.TW_FUTURES, Side.LONG, d, d + timedelta(days=i),
+              23000, 23000 + (50 if i % 2 else -50), 1,
+              fees=0, contract_multiplier=200.0)
+        for i in range(12)
+    ]
+    m = compute_metrics(TradeLog(trades))
+    # 資本基準 = 23000×200 = 4.6M;單筆虧 1 萬,回撤 % 必須遠小於 1%
+    assert m.max_drawdown_pct < 0.05
+
+
+def test_losing_streak_ignores_breakeven():
+    """打平交易不是虧損:連虧機率不得把 pnl==0 算進虧損率。"""
+    rng = random.Random(5)
+    # 一半打平、少量虧損:真實虧損率低,連虧 10 次機率應極小
+    pnls = [0.0] * 20 + [50.0] * 15 + [-30.0] * 5
+    s = simulate_ruin_scenario(pnls, start_equity=100000, n_paths=300)
+    # 虧損率 = 5/40 = 12.5% → 連虧10次機率 ≈ (0.125)^10 量級,幾乎為 0
+    assert s.losing_streak_10_prob < 0.001
+
+
+def test_scanner_fullwidth_and_zerowidth_evasion():
+    """NFKC 正規化 + 零寬字元剝除:全形/夾字規避必須被抓到。"""
+    r1 = scan_text("老師帶單保證獲利,快加客服升級ＶＩＰ,名額有限")
+    assert r1.risk_level in ("高", "極高")
+    r2 = scan_text("老師帶單,保​證​獲​利穩賺不賠,快加客服")
+    assert r2.risk_level in ("高", "極高")
+
+
+def test_scanner_first_negated_occurrence_not_terminal():
+    """首次出現被否定不可就此打住 —— 後面的真話術要抓到。"""
+    r = scan_text("有人說保證獲利都是騙人的。但我們不一樣!真的保證獲利穩賺不賠,快加客服升級VIP")
+    assert r.risk_level in ("高", "極高")
+
+
+def test_scanner_discussion_gate_not_exploitable():
+    """詐騙文夾一句求證語,不得觸發討論降級(相異類別 >= 3 時不降)。"""
+    r = scan_text("請問這是詐騙嗎?開玩笑的!老師帶單保證獲利,升級VIP名額有限,快匯款到平台入金")
+    assert r.risk_level in ("高", "極高")
+
+
+def test_forensics_zero_volatility_finding():
+    """恆定報酬(最露骨的龐氏樣態)不得因 runs/sharpe 回 None 而隱形。"""
+    f = analyze_returns([0.01] * 24)
+    assert any(x.code == "zero_volatility" for x in f.findings)
+    assert f.suspicion_level in ("高度可疑", "可疑")
+
+
+def test_forensics_survives_nan_inf():
+    """NaN / inf 不得汙染統計或造成崩潰。"""
+    rng = random.Random(3)
+    vals = [rng.gauss(0.01, 0.03) for _ in range(30)] + [float("nan"), float("inf")]
+    f = analyze_returns(vals)
+    assert f.n_periods == 30                     # 非有限值被剔除
+    assert math.isfinite(f.mean_return) and math.isfinite(f.volatility)
+
+
+def test_montecarlo_inferred_equity_flagged():
+    rng = random.Random(4)
+    pnls = [rng.gauss(10, 50) for _ in range(30)]
+    s = simulate_ruin_scenario(pnls, n_paths=200)          # 未給權益 → 推估
+    assert s.start_equity_inferred
+    assert any("粗估" in w for w in s.warnings)
+    s2 = simulate_ruin_scenario(pnls, start_equity=100000, n_paths=200)
+    assert not s2.start_equity_inferred
+
+
+def test_montecarlo_param_validation():
+    pnls = [1.0] * 20
+    for bad_kwargs in (
+        {"n_paths": 0}, {"ruin_drawdown": 1.5}, {"start_equity": -5},
+    ):
+        try:
+            simulate_ruin_scenario(pnls, **bad_kwargs)
+            assert False, f"應拒絕 {bad_kwargs}"
+        except ValueError:
+            pass
+
+
+def test_loader_mixed_timezone_does_not_crash():
+    """混合帶時區(ISO)與不帶時區的時間,排序/當沖判定不得 TypeError。"""
+    import tempfile
+    from core.ingest.loader import load_trades
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "tz.csv"
+        f.write_text(
+            "代號,方向,進場時間,出場時間,進場價,出場價,數量\n"
+            "2330,買,2025-01-03T09:00:00+08:00,2025-01-03T13:00:00+08:00,1000,1010,1000\n"
+            "2330,買,2025-01-06,2025-01-07,1000,1020,1000\n",
+            encoding="utf-8-sig",
+        )
+        log = load_trades(f, market_hint=Market.TW_STOCK)
+        assert len(log) == 2
+        ordered = log.sorted_by_time()           # 這裡以前會 TypeError
+        assert ordered.trades[0].is_day_trade    # 帶時區的那筆是當沖
 
 
 if __name__ == "__main__":

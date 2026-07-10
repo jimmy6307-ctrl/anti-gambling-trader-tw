@@ -128,7 +128,9 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     # 我們改用「估計初始資本」當分母:取所有交易中『最大單筆投入金額』
     # 作為帳戶資本規模的下限代理(實務上帳戶至少要撐得起最大那筆部位)。
     # 這讓回撤百分比落在「相對於帳戶規模」的合理區間。
-    position_sizes = [abs(t.entry_price * t.quantity) for t in trades]
+    # 用 contract_value(= 價格 × 數量 × 契約乘數):期貨若漏乘乘數,
+    # 資本基準會小 200 倍,回撤百分比整個失真。股票乘數為 1,結果不變。
+    position_sizes = [t.contract_value for t in trades]
     capital_base = max(position_sizes, default=0.0)
 
     equity = 0.0
