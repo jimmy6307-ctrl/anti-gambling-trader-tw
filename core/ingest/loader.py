@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -156,15 +157,19 @@ def _to_float(value: Any, default: float | None = None) -> float | None:
     if value is None or value == "":
         return default
     if isinstance(value, (int, float)):
-        return float(value)
+        f = float(value)
+        return f if math.isfinite(f) else default
     # 去除千分位逗號、貨幣符號、空白
     s = re.sub(r"[,$￥¥\s]", "", str(value))
     if s in ("", "-", "—"):
         return default
     try:
-        return float(s)
+        f = float(s)
     except ValueError:
         return default
+    # "nan"/"inf" 能被 float() 接受,但會汙染整條統計管線
+    # (NaN 的比較恆為 False,inf 讓權益/回撤全爛掉)——視同無法解析。
+    return f if math.isfinite(f) else default
 
 
 def sniff_format(path: str | Path) -> str:
@@ -323,9 +328,9 @@ def load_trades(
         market = infer_market(symbol, market_hint)
         side = _parse_side(get(row, "side", "long"))
 
-        entry_price = _to_float(get(row, "entry_price"), 0.0) or 0.0
-        exit_price = _to_float(get(row, "exit_price"), 0.0) or 0.0
-        quantity = (_to_float(get(row, "quantity"), 0.0) or 0.0) * lot_multiplier
+        entry_price_raw = _to_float(get(row, "entry_price"), None)
+        exit_price_raw = _to_float(get(row, "exit_price"), None)
+        quantity_raw = _to_float(get(row, "quantity"), None)
 
         # 契約乘數:期貨/選擇權必須乘,否則損益少算 200 倍。
         # 查不到就是 1.0 + unknown 旗標,絕不亂猜。
@@ -333,6 +338,28 @@ def load_trades(
 
         fees = _to_float(get(row, "fees"), None)
         pnl = _to_float(get(row, "pnl"), None)
+
+        # 有效性守門:這列的損益必須「算得出來」——
+        # 要嘛直接給了 pnl,要嘛(進場價 > 0、出場價 ≥ 0、數量 > 0)齊全。
+        # 缺料就略過並記錄,絕不用 0 補洞:0 元進場價會把出場價整段
+        # 誤算成獲利、空白 pnl 會變成假打平交易,都足以翻轉統計裁決。
+        has_prices = (
+            entry_price_raw is not None and entry_price_raw > 0
+            and exit_price_raw is not None and exit_price_raw >= 0
+            and quantity_raw is not None and quantity_raw > 0
+        )
+        if pnl is None and not has_prices:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):算不出損益"
+                    "(缺 pnl,且進場價/出場價/數量不完整或無法解析)"
+                )
+            continue
+
+        entry_price = entry_price_raw or 0.0
+        exit_price = exit_price_raw or 0.0
+        quantity = (quantity_raw or 0.0) * lot_multiplier
         tag = get(row, "tag")
         tag = str(tag).strip() if tag not in (None, "") else None
 

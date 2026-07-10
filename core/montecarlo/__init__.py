@@ -22,6 +22,7 @@
 
 from .simulate import (
     RuinScenario,
+    format_fraction,
     gambler_ruin_probability,
     losing_streak_probability,
     render_scenario,
@@ -30,6 +31,7 @@ from .simulate import (
 
 __all__ = [
     "RuinScenario",
+    "format_fraction",
     "gambler_ruin_probability",
     "losing_streak_probability",
     "simulate_ruin_scenario",

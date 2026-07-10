@@ -25,7 +25,7 @@ description: >-
 | 幫我看對帳單 / 我這套賺不賺 | `analyze <檔案> [--market ...]` | 一句話裁決 → 期望值/雙 p 值/樣本外 → 警訊;🛡 反詐提醒必轉達 |
 | 我是不是在賭博 / 只是運氣好? | `analyze <檔案>` | luck_suspected =「無法排除是運氣」,不是「你沒本事」 |
 | 哪一招在送錢 / 跟單有沒有賺 | `analyze`(讀【各策略體檢】【跟單成績單】) | per-tag 只有描述統計,**不可**說某招「有優勢」 |
-| 一次看完整體檢 | `analyze <檔案> --full --equity <本金>` | 主報告 + 月報趨勢 + 風險情境,警語自動附上 |
+| 一次看完整體檢 | `analyze <檔案> --full --equity <本金>` | 主報告 + 時間趨勢 + 風險情境,警語自動附上 |
 | 這老師可信嗎(勝率90%…) | `guru-check --win-rate 0.9 --trades N ...` | 機率語氣,絕不說「他一定是騙子」;沒 --trades 先要這個數字 |
 | 這訊息是詐騙嗎(貼對話) | `scan-text "文字"` 或 `--file 對話.txt` | 序數等級,不轉百分比;「低」≠安全 |
 | 老師連續猜對 N 次好神 | `survivorship --traders 1000 --streak N` | 是對「現象」的數學解釋,非對特定人的指控 |
@@ -49,7 +49,7 @@ description: >-
 1. **機率語氣,不定罪**:所有反詐工具只回答「在無能力假設下多容易靠運氣發生」。
 2. **序數不轉百分比**:風險等級是極高/高/中/低,絕不說「87% 是詐騙」。
 3. **情境非預測**:risk-sim 的數字是「如果未來像過去」,不是未來。
-4. **描述統計不認證**:per-tag 與 trend 的分月數字不可講成「有優勢/顯著」。
+4. **描述統計不認證**:per-tag 與 trend 的分期(月/季)數字不可講成「有優勢/顯著」。
 5. **勸退不軟化**:gambling / luck_suspected 的結論照實轉述。
 6. **🛡 反詐提醒必轉達**:使用者可能正被收割而不自知。
 7. **負期望 ≠ 樣本不足**:required_trades 為 null 時,絕不建議「多交易幾筆再看」——
@@ -61,17 +61,21 @@ description: >-
 ## analyze 主流程
 
 ```bash
-python -m core.cli analyze <檔案> [--market tw_stock|us_stock|crypto] \
+python -m core.cli analyze <檔案> \
+    [--market tw_stock|tw_etf|tw_futures|tw_options|us_stock|crypto|forex] \
     [--field 標準名=欄名 ...] [--full --equity 本金] \
     [--json out.json] [--strategy out.py --framework backtrader|vectorbt|generic] \
     [--html 報告.html] [--card 圖卡.html] [--example tw|us|crypto] [--bootstrap N]
 ```
 
+`--market` 通常可省略 —— 工具會從標的代號自動推斷市場(混合市場的紀錄
+就該省略);只在「整份紀錄同屬一個市場且自動推斷有誤」時才指定。
+
 五種裁決等級:
 
 | 等級 | 意義 | 勸退 |
 |------|------|------|
-| `gambling` | 期望值為負,數學上注定長期虧損 | ✅ 強烈勸退 |
+| `gambling` | 樣本期望值為負 —— 若方法不變,長期繼續的統計預期是虧損 | ✅ 強烈勸退 |
 | `insufficient` | 樣本太少(<30),無法區分本事與運氣 | ✅ 勸阻重押 |
 | `luck_suspected` | 帳面賺錢,但統計上無法排除是運氣 | ✅ 高度存疑 |
 | `fragile_edge` | 有統計訊號但結構脆弱 | ✅ 謹慎 |
@@ -104,15 +108,18 @@ forensics=可疑、risk-sim=爆倉路徑>10%),錯誤回 `1`,其餘 `0`。
 
 ## 反詐四件套速查
 
-- `scan-text`:支援簡體話術(「保证获利」也抓得到)、Big5 檔自動回退、
-  管線輸入(`cat 對話.txt | ... scan-text`)。
+- `scan-text`:支援簡體話術(「保证获利」也抓得到)、Big5 檔自動回退。
+  跨平台首選 `scan-text --file 對話.txt`;管線輸入 POSIX 用
+  `cat 對話.txt | ... scan-text`,PowerShell 用 `Get-Content 對話.txt | ... scan-text`。
 - `guru-check`:對長期上漲標的(如美股大盤)把 `--null-win-prob` 調高至
   0.55~0.62,避免對多頭市場過度嚴苛 —— 連工具的保守都要誠實。
 - `forensics`:先問資料是月報酬(--periods-per-year 12)還是日報酬(252),
   給錯會算出錯誤的年化夏普。**不用班佛定律**(報酬有負數、不跨數量級,
   前提不成立 —— 見 docs/methodology.md「我們刻意不做的事」)。
-- `survivorship`:精確解析解。實測 1000 人連贏 10 次的機率是 62.4% 不是 1,
-  所以說「有 X% 機率出現」,不說「必然存在」。
+- `survivorship`:精確解析解(模型計算,非實證資料)。例:1000 人、每人恰猜
+  10 次,至少一人全對的機率是 62.4%;CLI 預設每人 20 次(`--trials 20`),
+  同樣條件算出 99.7% —— 引用數字必須連參數一起講,
+  且說「有 X% 機率出現」,不說「必然存在」。
 
 ## scaffold(建立個人交易程式)
 
@@ -137,7 +144,8 @@ forensics=可疑、risk-sim=爆倉路徑>10%),錯誤回 `1`,其餘 `0`。
   遇亂碼先試環境變數,不要懷疑資料壞掉。
 - 程式化使用:`from core.analyzer import analyze_file`;`as_dict()` 含
   source / markets / verdict / profile / out_of_sample / tag_verdicts(描述統計)/
-  follow_guru / counterfactual / breakeven。
+  follow_guru / counterfactual / breakeven。CLI 同時帶 `--full --json` 時,
+  JSON 另含 `full_extras`(trend / risk_scenario / 略過原因)。
 - 核心零依賴;.xlsx 需 openpyxl;跑回測骨架需 backtrader 或 vectorbt。
 
 ## 免責

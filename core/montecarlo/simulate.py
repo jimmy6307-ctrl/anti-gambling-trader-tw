@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -107,12 +108,18 @@ def simulate_ruin_scenario(
         raise ValueError("n_paths 與 n_future_trades 必須 >= 1")
     if not (0.0 <= ruin_drawdown <= 1.0):
         raise ValueError(f"ruin_drawdown 必須在 [0, 1],收到 {ruin_drawdown}")
-    if start_equity is not None and start_equity <= 0:
-        raise ValueError(f"start_equity 必須 > 0,收到 {start_equity}")
+    # NaN 與 inf 都能通過「<= 0」檢查:inf 讓所有路徑第一筆就被判爆倉、
+    # NaN 讓爆倉比例錯誤地變成 0 —— 必須用 isfinite 擋掉。
+    if start_equity is not None and not (
+        math.isfinite(start_equity) and start_equity > 0
+    ):
+        raise ValueError(f"start_equity 必須是 > 0 的有限數,收到 {start_equity}")
 
     n = len(pnls)
     if n < 10:
         return None
+    if any(not math.isfinite(p) for p in pnls):
+        raise ValueError("損益序列含 NaN/inf,無法模擬 —— 請先清理資料")
 
     equity_inferred = start_equity is None
     if start_equity is None:
@@ -200,6 +207,26 @@ def simulate_ruin_scenario(
     )
 
 
+def format_fraction(frac: float) -> str:
+    """比例顯示紀律:開區間的值絕不能被捨入成端點。
+
+    0.9996 若印成「100.0%」= 對讀者說「全爆」的假話(其實還有存活路徑);
+    0.0004 若印成「0.0%」= 說「完全沒事」的假話。先格式化、再攔截端點字樣,
+    改用「>99.9%」「<0.1%」誠實表達 —— 這個攔截法不依賴浮點捨入細節。
+    終端報告與 HTML 報告都必須用這個格式器,不得各自 f-string。
+    """
+    if frac >= 1.0:
+        return "100%"
+    if frac <= 0.0:
+        return "0%"
+    text = f"{frac:.0%}" if 0.005 <= frac <= 0.995 else f"{frac:.1%}"
+    if text in ("100%", "100.0%"):
+        return ">99.9%"
+    if text in ("0%", "0.0%"):
+        return "<0.1%"
+    return text
+
+
 def render_scenario(s: RuinScenario) -> str:
     """輸出可讀報告。刻意用「情境」而非「預測」的措辭。"""
     L = ["=" * 66, "        風險情境模擬 — 如果未來長得像過去,會怎樣?", "=" * 66, ""]
@@ -211,9 +238,9 @@ def render_scenario(s: RuinScenario) -> str:
     L.append("【情境結果】")
 
     # 爆倉比例:用「多少條路徑」而非「機率」措辭,並分級。
-    # 格式化紀律:0.998 不可印成「100%」(讀起來像確定性,是說假話)。
+    # 格式化紀律見 format_fraction:開區間值絕不捨入成 0%/100%。
     frac = s.ruin_fraction
-    pct = f"{frac:.0%}" if 0.005 <= frac <= 0.995 else f"{frac:.1%}"
+    pct = format_fraction(frac)
     if frac == 0:
         desc = "在這些情境裡,沒有一條路徑爆掉"
     elif frac < 0.01:
@@ -237,7 +264,7 @@ def render_scenario(s: RuinScenario) -> str:
     L.append(f"  最大回撤    : 中位數 {s.median_max_drawdown:.0%},"
              f"最壞 5% 的情境達 {s.p95_max_drawdown:.0%}")
     L.append(f"  連虧 10 次  : 在未來 {s.n_future_trades} 筆裡出現的機率 "
-             f"{s.losing_streak_10_prob:.1%}")
+             f"{format_fraction(s.losing_streak_10_prob)}")
     L.append("            (以你目前的勝率計算。連虧不是「會不會」,是「什麼時候」——")
     L.append("             問題是那時候你還守得住紀律嗎?)")
     L.append("")

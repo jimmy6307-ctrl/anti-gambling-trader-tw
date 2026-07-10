@@ -34,8 +34,9 @@ def _run_cli(*argv: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         cwd=str(Path(__file__).resolve().parent.parent),
-        env={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-             **__import__("os").environ},
+        # 覆寫值放在展開之後,否則外部環境同名變數會蓋掉測試指定值
+        env={**__import__("os").environ,
+             "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
         timeout=600,
     )
 
@@ -97,6 +98,120 @@ def test_html_without_full_has_no_extra_blocks():
         h = Path(html).read_text(encoding="utf-8")
         assert "月報趨勢" not in h
         assert "風險情境模擬" not in h
+
+
+# ── 第 6 輪辯論(gpt-5.6-sol + grok-4.5)確認的 bug 回歸測試 ──────────────
+
+
+def test_loader_rejects_rows_without_computable_pnl():
+    """空白 pnl 且價格不全的列必須略過,不得變成假打平/假獲利交易。"""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "pnl_blank.csv"
+        p.write_text(
+            "symbol,pnl\nAAPL,100\nAAPL,\nAAPL,-50\n", encoding="utf-8")
+        from core.ingest.loader import load_trades
+        log = load_trades(str(p))
+        assert len(log.trades) == 2, "空白 pnl 列應被略過,不是補 0"
+        assert [t.pnl for t in log.trades] == [100.0, -50.0]
+
+        # 進場價無法解析 → 不得把出場價整段當獲利
+        p2 = Path(td) / "bad_price.csv"
+        p2.write_text(
+            "symbol,entry_price,exit_price,quantity,fees\n"
+            "AAPL,abc,100,10,0\nAAPL,50,60,10,0\n", encoding="utf-8")
+        log2 = load_trades(str(p2))
+        assert len(log2.trades) == 1, "進場價爛掉的列應略過"
+        assert log2.trades[0].pnl == 100.0
+
+        # nan/inf 字串視同無法解析
+        p3 = Path(td) / "nan_inf.csv"
+        p3.write_text(
+            "symbol,pnl\nAAPL,nan\nAAPL,inf\nAAPL,5\n", encoding="utf-8")
+        log3 = load_trades(str(p3))
+        assert [t.pnl for t in log3.trades] == [5.0]
+
+
+def test_ruin_scenario_rejects_nan_inf_equity():
+    """NaN 本金會讓爆倉比例假裝 0%、inf 會全爆 —— 必須直接拒絕。"""
+    from core.montecarlo import simulate_ruin_scenario
+
+    pnls = [100.0, -100.0] * 6
+    for bad in (float("nan"), float("inf"), 0.0, -5.0):
+        try:
+            simulate_ruin_scenario(pnls, start_equity=bad)
+            raise AssertionError(f"start_equity={bad} 應 raise ValueError")
+        except ValueError:
+            pass
+    try:
+        simulate_ruin_scenario(pnls + [float("nan")], start_equity=10000.0)
+        raise AssertionError("含 NaN 的損益序列應 raise ValueError")
+    except ValueError:
+        pass
+
+
+def test_analyze_full_equity_zero_is_friendly_error():
+    """--equity 0 必須是友善錯誤(exit 1 + 中文訊息),不是 traceback。"""
+    p = _run_cli("analyze", "--example", "tw", "--full", "--equity", "0")
+    assert p.returncode == 1
+    assert "Traceback" not in p.stderr, f"不該有 traceback:{p.stderr[-300:]}"
+    assert "--equity" in p.stderr
+
+
+def test_equity_without_full_warns():
+    """--equity 沒搭 --full 時要提醒未生效,不能靜默忽略。"""
+    p = _run_cli("analyze", "--example", "tw", "--equity", "500000")
+    assert "未帶 --full" in p.stderr
+
+
+def test_format_fraction_never_rounds_open_interval_to_endpoints():
+    """0.9996 不可顯示 100%、0.0004 不可顯示 0% —— 端點只留給真端點。"""
+    from core.montecarlo import format_fraction as ff
+
+    assert ff(1.0) == "100%" and ff(0.0) == "0%"
+    for frac in (0.9996, 0.9999, 0.99951):
+        assert "100" not in ff(frac), f"{frac} 顯示 {ff(frac)}"
+    for frac in (0.0004, 0.0001, 0.00049):
+        out = ff(frac)
+        assert out != "0.0%" and out != "0%", f"{frac} 顯示 {out}"
+    assert ff(0.37) == "37%"
+
+
+def test_full_html_discloses_skipped_scenario():
+    """--full 但樣本 <10 筆:HTML 必須寫明「已略過+原因」,不得靜默消失。"""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        csv = Path(td) / "small.csv"
+        rows = "\n".join(
+            f"AAPL,long,2024-0{i%2+1}-0{i+1},2024-0{i%2+1}-1{i},100,10{i},10"
+            for i in range(5)
+        )
+        csv.write_text(
+            "symbol,side,entry_time,exit_time,entry_price,exit_price,quantity\n"
+            + rows + "\n", encoding="utf-8")
+        html = Path(td) / "r.html"
+        p = _run_cli("analyze", str(csv), "--full", "--html", str(html))
+        assert "已略過風險情境模擬" in p.stdout
+        content = html.read_text(encoding="utf-8")
+        assert "已略過風險情境模擬" in content
+        assert "尚未被評估" in content
+
+
+def test_full_json_contains_extras():
+    """--full --json:JSON 必須含 full_extras(趨勢+風險情境)。"""
+    import json as _json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "o.json"
+        _run_cli("analyze", "--example", "tw", "--full",
+                 "--equity", "500000", "--json", str(out))
+        data = _json.loads(out.read_text(encoding="utf-8"))
+        assert "full_extras" in data
+        assert data["full_extras"]["trend"] is not None
+        assert data["full_extras"]["risk_scenario"] is not None
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -108,14 +109,27 @@ def _analyze_with_overrides(target, market_hint, args, field_overrides):
 
 
 def _compute_full_extras(result, equity):
-    """--full 健檢:算出趨勢報告與風險情境(scenario 可為 None = 樣本不足)。"""
+    """--full 健檢:算出趨勢報告與風險情境。
+
+    回傳 (trend_report, scenario, skip_reason):
+    scenario 為 None 時 skip_reason 必有值,說明「為什麼略過」——
+    這個原因會同步進終端、HTML 與 JSON,三個通道的誠實度必須一致,
+    不能終端有解釋、分享出去的 HTML 卻靜默消失。
+    """
     from .montecarlo import simulate_ruin_scenario
     from .trend import analyze_trend
 
     trend_report = analyze_trend(result.log)
     pnls = [t.pnl or 0.0 for t in result.log]
-    scenario = simulate_ruin_scenario(pnls, start_equity=equity)
-    return trend_report, scenario
+    try:
+        scenario = simulate_ruin_scenario(pnls, start_equity=equity)
+    except ValueError as exc:
+        # 第二層防護(--equity 已在入口驗證):模擬失敗不該炸掉整份報告,
+        # 主報告照常輸出,風險區塊誠實標示無法執行的原因。
+        return trend_report, None, str(exc)
+    if scenario is None:
+        return trend_report, None, "交易不足 10 筆 —— 樣本太少,模擬只會給假精準"
+    return trend_report, scenario, None
 
 
 def _render_trend(report) -> str:
@@ -130,6 +144,9 @@ def _render_scenario(s) -> str:
 
 def _print_next_steps(result, args, target) -> None:
     """依裁決結果,動態提示使用者接下來能做什麼。"""
+    # 提示裡的指令要能直接複製執行:路徑含空白就加引號,否則會被 shell 拆開
+    t = str(target)
+    quoted = f'"{t}"' if any(ch.isspace() for ch in t) else t
     print("\n" + "─" * 70)
     print("下一步:")
     v = result.verdict
@@ -139,12 +156,12 @@ def _print_next_steps(result, args, target) -> None:
             print("  • 你有跟單 / 聽明牌的虧損 → 執行 anti-gambling-trader scam-check 檢測是否遇到詐騙。")
     else:
         print(f"  • 想把這套邏輯變成可回測程式?執行 "
-              f"anti-gambling-trader scaffold --from-analysis {target}")
+              f"anti-gambling-trader scaffold --from-analysis {quoted}")
     # 可發現性:analyze 只是體檢的第一步,主動導流到趨勢與風險情境
     if not getattr(args, "full", False):
-        print(f"  • 想看月報趨勢、優勢是否在衰退?執行 anti-gambling-trader trend {target}")
+        print(f"  • 想看時間趨勢、優勢是否在衰退?執行 anti-gambling-trader trend {quoted}")
         print(f"  • 想模擬「這樣玩下去會不會爆倉」?執行 "
-              f"anti-gambling-trader risk-sim {target} --equity 你的本金")
+              f"anti-gambling-trader risk-sim {quoted} --equity 你的本金")
         print("  • 或一次看完:analyze 加上 --full(主報告 + 趨勢 + 風險情境)")
     extras = []
     if not args.strategy:
@@ -258,7 +275,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     a.add_argument(
         "--full", action="store_true",
-        help="一鍵全身健檢:主報告後附上月報趨勢(trend)與風險情境模擬(risk-sim)",
+        help="一鍵全身健檢:主報告後附上時間趨勢(trend)與風險情境模擬(risk-sim)",
     )
     a.add_argument(
         "--equity", type=float, default=None,
@@ -417,6 +434,22 @@ def main(argv: list[str] | None = None) -> int:
         if field_overrides is None:
             return 1
 
+        # --equity 先驗證再開始分析:0/負數/NaN/inf 都會讓風險模擬
+        # 產生垃圾或崩潰,與其印完主報告才炸,不如一開始就講清楚。
+        if args.equity is not None:
+            if not (math.isfinite(args.equity) and args.equity > 0):
+                print(
+                    f"錯誤: --equity 必須是 > 0 的有限數,收到 {args.equity}",
+                    file=sys.stderr,
+                )
+                return 1
+            if not args.full:
+                print(
+                    "提醒: --equity 只在 --full 的風險情境模擬中使用;"
+                    "本次未帶 --full,此參數不會生效。",
+                    file=sys.stderr,
+                )
+
         try:
             result = _analyze_with_overrides(
                 target, market_hint, args, field_overrides
@@ -428,22 +461,37 @@ def main(argv: list[str] | None = None) -> int:
         # 終端機輸出完整報告
         print(result.text_report)
 
-        # --full:一鍵全身健檢,附上月報趨勢與風險情境
+        # --full:一鍵全身健檢,附上時間趨勢與風險情境
         full_extras = None
         if args.full:
             full_extras = _compute_full_extras(result, args.equity)
-            trend_report, scenario = full_extras
+            trend_report, scenario, skip_reason = full_extras
             print()
             print(_render_trend(trend_report))
             print()
             if scenario is not None:
                 print(_render_scenario(scenario))
+                if scenario.start_equity_inferred:
+                    print(
+                        "  💡 上面的本金是工具粗估的 —— 下次帶 --equity 你的真實本金,"
+                        "爆倉比例才有意義。"
+                    )
             else:
-                print("(交易不足 10 筆,略過風險情境模擬 —— 樣本太少,模擬只會給假精準。)")
+                print(f"(已略過風險情境模擬:{skip_reason}。)")
 
         if args.json:
+            payload = result.as_dict()
+            if full_extras is not None:
+                trend_report, scenario, skip_reason = full_extras
+                # --full 的附加結果一併進 JSON,避免機器可讀輸出與
+                # 「一鍵全身健檢」的語意不一致(終端有、JSON 卻沒有)。
+                payload["full_extras"] = {
+                    "trend": trend_report.as_dict(),
+                    "risk_scenario": scenario.as_dict() if scenario else None,
+                    "risk_scenario_skipped_reason": skip_reason,
+                }
             Path(args.json).write_text(
-                json.dumps(result.as_dict(), ensure_ascii=False, indent=2),
+                json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             print(f"\n[已輸出 JSON 結果] {args.json}")
@@ -460,10 +508,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.html:
             from .report_html import render_html_report
 
-            # --full 時把趨勢與風險情境一併帶進 HTML(警語隨區塊自動進入)
-            trend_r, scen = full_extras if full_extras else (None, None)
+            # --full 時把趨勢與風險情境一併帶進 HTML(警語隨區塊自動進入);
+            # 模擬被略過時,略過原因也要進 HTML —— 分享出去的報告
+            # 不能看起來像「完整健檢已做完」。
+            trend_r, scen, skip = full_extras if full_extras else (None, None, None)
             Path(args.html).write_text(
-                render_html_report(result, trend=trend_r, scenario=scen),
+                render_html_report(
+                    result, trend=trend_r, scenario=scen, scenario_note=skip
+                ),
                 encoding="utf-8",
             )
             print(f"[已輸出 HTML 報告] {args.html}(用瀏覽器打開)")

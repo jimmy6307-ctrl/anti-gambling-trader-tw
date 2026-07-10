@@ -89,11 +89,14 @@ def render_html_report(
     title: str = "反詐投資王 — 交易績效誠實報告",
     trend=None,
     scenario=None,
+    scenario_note: str | None = None,
 ) -> str:
     """把 AnalysisResult 渲染成自包含 HTML。純 passthrough,不新增任何結論。
 
     trend / scenario 為 --full 健檢時的選配區塊(TrendReport / RuinScenario);
     預設 None 保持精簡 —— HTML 報告的定位是「傳給家人的鐵證」,不稀釋裁決。
+    scenario_note:--full 但模擬被略過時的原因,會渲染成明確的「已略過」區塊;
+    終端說了「略過」而 HTML 靜默消失 = 兩個通道誠實度不一致,禁止。
     """
     v = result.verdict
     m = result.metrics
@@ -139,9 +142,12 @@ def render_html_report(
     )
     flags_html = f"<h2>偵測到的警訊</h2><ul>{flags}</ul>" if flags else ""
 
-    # --full 選配區塊:月報趨勢(沿用 reliability 三態,不足的桶誠實不判讀)
+    # --full 選配區塊:時間趨勢(沿用 reliability 三態,不足的桶誠實不判讀)。
+    # 標題跟著 granularity 走:紀錄跨 24 個月以上 analyze_trend 會自動改季度,
+    # 把季度表硬標成「月報」是張冠李戴。
     trend_html = ""
     if trend is not None and trend.buckets:
+        period_word = "季" if trend.granularity == "quarter" else "月"
         rows = ""
         for b in trend.buckets:
             if b.reliability == "too_few":
@@ -157,30 +163,41 @@ def render_html_report(
                 f"<td class='num'>{b.total_pnl:,.2f}</td><td>{h(note)}</td></tr>"
             )
         trend_html = (
-            f"<h2>月報趨勢</h2>"
+            f"<h2>{period_word}報趨勢</h2>"
             f"<table><thead><tr><th>期間</th><th>筆數</th><th>勝率</th>"
             f"<th>每筆期望值</th><th>總損益</th><th>備註</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>"
             f"<p>{h(trend.decay.headline)}</p>"
-            f'<p class="muted">分月數字為描述統計;「看起來在跌」不是衰退證據,'
+            f'<p class="muted">分{period_word}數字為描述統計;「看起來在跌」不是衰退證據,'
             f"以上方單一檢定的結論為準。</p>"
         )
 
-    # --full 選配區塊:風險情境(警語必須跟著進來,不可只給數字)
+    # --full 選配區塊:風險情境(警語必須跟著進來,不可只給數字)。
+    # 比例一律走 format_fraction:0.9996 不可印成 100.0%(那是說「全爆」的假話)。
     scenario_html = ""
     if scenario is not None:
+        from .montecarlo import format_fraction as _ff
+
         warn_items = "".join(f"<li>{h(w)}</li>" for w in scenario.warnings)
         inferred = "(⚠️ 工具粗估,非真實帳戶)" if scenario.start_equity_inferred else ""
         scenario_html = (
             f"<h2>風險情境模擬(如果未來長得像過去)</h2>"
             f"<table><tbody>"
             f"<tr><td>起始權益</td><td class='num'>{scenario.start_equity:,.0f} {h(inferred)}</td></tr>"
-            f"<tr><td>爆倉路徑比例</td><td class='num'>{scenario.ruin_fraction:.1%}</td></tr>"
+            f"<tr><td>爆倉路徑比例</td><td class='num'>{h(_ff(scenario.ruin_fraction))}</td></tr>"
             f"<tr><td>最大回撤(中位數 / 最壞 5%)</td>"
             f"<td class='num'>{scenario.median_max_drawdown:.0%} / {scenario.p95_max_drawdown:.0%}</td></tr>"
-            f"<tr><td>連虧 10 次的機率</td><td class='num'>{scenario.losing_streak_10_prob:.1%}</td></tr>"
+            f"<tr><td>連虧 10 次的機率</td><td class='num'>{h(_ff(scenario.losing_streak_10_prob))}</td></tr>"
             f"</tbody></table>"
             f'<div class="alert"><b>這是「情境」不是「預測」:</b><ul>{warn_items}</ul></div>'
+        )
+    elif scenario_note:
+        # --full 但模擬被略過:分享出去的 HTML 必須寫明「略過+原因」,
+        # 不能讓讀的人以為爆倉風險已評估過或不需要評估。
+        scenario_html = (
+            f"<h2>風險情境模擬(如果未來長得像過去)</h2>"
+            f'<div class="alert">本次已略過風險情境模擬:{h(scenario_note)}。'
+            f"這代表爆倉風險<b>尚未被評估</b>,不代表沒有風險。</div>"
         )
 
     sig = v.significance
