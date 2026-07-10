@@ -18,7 +18,13 @@ from .models import Market
 
 
 def _force_utf8_stdout() -> None:
-    """確保中文與 emoji 在各平台終端機都能正確輸出(尤其 Windows cp950)。"""
+    """確保中文在各平台終端機正確進出(尤其 Windows cp950)。
+
+    stdin 也必須處理:Windows 上管線餵入的 UTF-8 中文會被 cp950 解碼成亂碼,
+    導致 `cat 對話.txt | scan-text` 的詐騙關鍵字**靜默漏抓**(判「低風險」)——
+    對一個反詐工具,因編碼漏抓詐騙是最諷刺的失敗。只對非 tty 的 stdin 重設,
+    不動互動輸入;errors='replace' 避免真的餵入非 UTF-8 位元組時直接崩潰。
+    """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
@@ -26,6 +32,13 @@ def _force_utf8_stdout() -> None:
                 reconfigure(encoding="utf-8")
             except (ValueError, OSError):
                 pass
+    try:
+        if not sys.stdin.isatty():
+            reconfigure = getattr(sys.stdin, "reconfigure", None)
+            if reconfigure is not None:
+                reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
 
 
 def _broker_choices() -> list[str]:
@@ -36,7 +49,9 @@ def _broker_choices() -> list[str]:
 
 def _examples_dir() -> Path:
     """用 __file__ 定位 examples/,不依賴使用者的 cwd。"""
-    return Path(__file__).resolve().parent.parent / "examples"
+    # examples 放在 core/ 套件內並透過 package-data 打包 ——
+    # 否則 pip 安裝後 site-packages 上一層沒有 examples/,demo 與 --example 全壞。
+    return Path(__file__).resolve().parent / "examples"
 
 
 # 範例對照:--example 值 → (檔案, 市場)
@@ -480,10 +495,37 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _read_file_text(path_str: str) -> str | None:
+    """讀文字檔,對散戶友善:自動處理 BOM 與 Big5/cp950,錯誤給人話而非 traceback。
+
+    回傳 None 表示讀取失敗(錯誤訊息已印到 stderr,呼叫端直接 return 1)。
+    """
+    p = Path(path_str)
+    try:
+        # utf-8-sig 順便吃掉 Windows 記事本常見的 UTF-8 BOM
+        return p.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            return p.read_text(encoding="cp950")   # 台灣常見的 Big5 舊檔
+        except (UnicodeDecodeError, OSError):
+            print(
+                f"錯誤:無法解讀 {path_str} 的文字編碼。"
+                "請用記事本或 Excel 將檔案另存為 UTF-8 後再試。",
+                file=sys.stderr,
+            )
+            return None
+    except FileNotFoundError:
+        print(f"錯誤:找不到檔案 {path_str}", file=sys.stderr)
+        return None
+    except OSError as exc:
+        print(f"錯誤:無法讀取 {path_str}({exc})", file=sys.stderr)
+        return None
+
+
 def _read_text_input(args) -> str | None:
     """從參數 / 檔案 / 標準輸入取得文字。"""
     if getattr(args, "file", None):
-        return Path(args.file).read_text(encoding="utf-8")
+        return _read_file_text(args.file)
     if getattr(args, "text", None):
         return args.text
     if not sys.stdin.isatty():
@@ -535,7 +577,9 @@ def _cmd_forensics(args) -> int:
 
     raw: str | None = None
     if args.file:
-        raw = Path(args.file).read_text(encoding="utf-8")
+        raw = _read_file_text(args.file)
+        if raw is None:
+            return 1
     elif args.returns:
         raw = args.returns
     if not raw:
@@ -586,12 +630,17 @@ def _cmd_risk_sim(args) -> int:
         return 1
 
     pnls = [t.pnl or 0.0 for t in log]
-    s = simulate_ruin_scenario(
-        pnls,
-        start_equity=args.equity,
-        n_future_trades=args.future_trades,
-        n_paths=args.paths,
-    )
+    try:
+        s = simulate_ruin_scenario(
+            pnls,
+            start_equity=args.equity,
+            n_future_trades=args.future_trades,
+            n_paths=args.paths,
+        )
+    except ValueError as exc:
+        # simulate 的參數驗證訊息已是清楚的繁中,直接轉述,不給 traceback
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
     if s is None:
         print("交易筆數太少(< 10),無法做有意義的情境模擬。", file=sys.stderr)
         return 1
@@ -661,7 +710,13 @@ def _cmd_scaffold(args) -> int:
         symbols=symbols or ["AAPL"],
         verdict=verdict,
     )
-    root = write_project(opts, args.out)
+    try:
+        root = write_project(opts, args.out)
+    except (ValueError, OSError) as exc:
+        # ScaffoldOptions.validate() 的訊息已是清楚的繁中(非法專案名/標的),
+        # 直接轉述而非丟 traceback 給散戶。
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
     print(f"✅ 個人交易程式專案已產生:{root}\n")
     print("下一步:")
     print(f"  cd {root}")

@@ -52,6 +52,7 @@ class ReturnsForensics:
 
     findings: list[Finding] = field(default_factory=list)
     suspicion_level: str = "資訊不足"   # 序數,不給百分比
+    n_dropped: int = 0                  # 被剔除的非數值期數(NaN/inf)——必須揭露,不可靜默
 
     def as_dict(self) -> dict:
         return {
@@ -69,6 +70,7 @@ class ReturnsForensics:
                 self.terminal_digits.p_value if self.terminal_digits else None
             ),
             "round_number_ratio": self.round_number_ratio,
+            "n_dropped": self.n_dropped,
             "suspicion_level": self.suspicion_level,
             "findings": [f.__dict__ for f in self.findings],
         }
@@ -109,7 +111,9 @@ def analyze_returns(
 
     n = len(returns)
     if n == 0:
-        return ReturnsForensics(0, 0.0, 0.0, 0.0, suspicion_level="資訊不足")
+        # 「全是 NaN」是最極端的情況,更要揭露剔除數
+        return ReturnsForensics(0, 0.0, 0.0, 0.0, suspicion_level="資訊不足",
+                                n_dropped=n_dropped)
 
     mean = sum(returns) / n
     if n > 1:
@@ -131,6 +135,7 @@ def analyze_returns(
         # 「最後一位」全是 0,檢定的是量級而非尾數偏好,毫無意義。
         terminal_digits=terminal_digit_test(returns, decimals=4),
         round_number_ratio=_round_number_ratio(returns, decimals=4),
+        n_dropped=n_dropped,
     )
 
     findings: list[Finding] = []
@@ -269,6 +274,11 @@ def render_forensics(f: ReturnsForensics, *, label: str = "宣稱的績效") -> 
     L = ["=" * 66, f"        假績效統計鑑識 — {label}", "=" * 66, ""]
     if f.n_periods < 8:
         L.append("⚠️ 資料期數太少(< 8 期),無法做有意義的鑑識。")
+        if f.n_dropped:
+            L.append(
+                f"   (其中 {f.n_dropped} 期為非數值 NaN/inf,已剔除 —— "
+                "期數不足可能正是因為這些缺漏)"
+            )
         L.append("   請向對方索取更長、更完整的紀錄 —— 拿不出來,本身就是警訊。")
         return "\n".join(L)
 
@@ -276,6 +286,11 @@ def render_forensics(f: ReturnsForensics, *, label: str = "宣稱的績效") -> 
     L.append("")
     L.append("【基本描述】")
     L.append(f"  期數        : {f.n_periods}")
+    if f.n_dropped:
+        L.append(
+            f"  ⚠ 有 {f.n_dropped} 期為非數值(NaN/inf),已剔除 —— "
+            "請追問原始資料為何缺漏"
+        )
     L.append(f"  平均報酬    : {f.mean_return:.2%}")
     L.append(f"  波動度      : {f.volatility:.2%}")
     L.append(f"  正報酬比例  : {f.positive_ratio:.0%}")

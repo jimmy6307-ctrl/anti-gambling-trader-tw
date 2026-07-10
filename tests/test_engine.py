@@ -160,7 +160,7 @@ def test_report_follow_guru_section():
 # ── JSON 序列化 ────────────────────────────────────────────
 def test_as_dict_json_serializable():
     result = analyze_file(
-        Path(__file__).resolve().parent.parent / "examples" / "tw_stock_gambling.csv",
+        Path(__file__).resolve().parent.parent / "core" / "examples" / "tw_stock_gambling.csv",
         market_hint=Market.TW_STOCK,
     )
     d = result.as_dict()

@@ -1,0 +1,3 @@
+[     194ms] TypeError: c.addCandlestickSeries is not a function
+    at http://localhost:18742/preview.html:84:13
+    at http://localhost:18742/preview.html:93:3

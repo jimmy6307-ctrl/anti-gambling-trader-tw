@@ -79,7 +79,7 @@ def _safe_json(payload):
 
 _TEMPLATE = """<!doctype html><html lang=\\"zh-Hant\\"><head><meta charset=\\"utf-8\\">
 <title>交易策略圖表</title>
-<script src=\\"https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js\\"></script>
+<script src=\\"https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js\\"></script>
 <style>body{margin:0;background:#131722;color:#d1d4dc;font-family:system-ui}
 h2{padding:12px 16px;margin:0}#c{height:60vh}#e{height:28vh}</style></head>
 <body><h2 id=\\"t\\"></h2><div id=\\"c\\"></div><div id=\\"e\\"></div>
@@ -162,27 +162,44 @@ _MPLFINANCE = ChartLib(
     blurb="最簡單、零前端,適合產出 PNG 圖檔報告。",
     module_code='''"""mplfinance 繪圖模組:產出靜態 K 線 PNG 圖。"""
 
+import math
+
 
 def render(candles, markers, equity, out_png="chart.png", title="我的交易策略"):
     import pandas as pd
     import mplfinance as mpf
 
     df = pd.DataFrame(candles)
-    df["time"] = pd.to_datetime(df["time"], unit="s", errors="ignore")
+    # errors="coerce":解析失敗給 NaT 而非靜默保留原值(errors="ignore" 已棄用)
+    df["time"] = pd.to_datetime(df["time"], unit="s", errors="coerce")
     df = df.rename(columns=str.capitalize).set_index("Time")
 
-    # 進出場標記:對齊到 K 線索引
+    # 進出場標記:用「K 線的 time」對齊到列索引,依 side 填入該列的價格
     buy_y = [float("nan")] * len(df)
     sell_y = [float("nan")] * len(df)
-    idx = {str(t): i for i, t in enumerate(candles)}  # 簡化對齊;實務可依時間精確比對
+    pos_of = {c["time"]: i for i, c in enumerate(candles)}
+    for m in markers:
+        i = pos_of.get(m["time"])
+        if i is None:
+            continue
+        if m["side"] == "buy":
+            buy_y[i] = m["price"]
+        else:
+            sell_y[i] = m["price"]
+
     addplots = []
-    if any(m["side"] == "buy" for m in markers):
+    if any(not math.isnan(v) for v in buy_y):
         addplots.append(mpf.make_addplot(buy_y, type="scatter", marker="^", color="g"))
-    if any(m["side"] == "sell" for m in markers):
+    if any(not math.isnan(v) for v in sell_y):
         addplots.append(mpf.make_addplot(sell_y, type="scatter", marker="v", color="r"))
 
-    mpf.plot(df, type="candle", style="charles", title=title,
-             addplot=addplots or None, volume=True, savefig=out_png)
+    # 注意:mplfinance 對顯式 addplot=None 會報 TypeError,
+    # 沒有訊號時必須「不傳」這個參數,而不是傳 None。
+    kwargs = dict(type="candle", style="charles", title=title,
+                  volume=True, savefig=out_png)
+    if addplots:
+        kwargs["addplot"] = addplots
+    mpf.plot(df, **kwargs)
     return out_png
 ''',
 )
@@ -231,7 +248,7 @@ def _safe_json(payload):
 
 _TEMPLATE = """<!doctype html><html lang=\\"zh-Hant\\"><head><meta charset=\\"utf-8\\">
 <title>交易策略圖表</title>
-<script src=\\"https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js\\"></script>
+<script src=\\"https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js\\"></script>
 <style>body{margin:0;background:#131722}#c{width:100vw;height:65vh}#e{width:100vw;height:30vh}</style>
 </head><body><div id=\\"c\\"></div><div id=\\"e\\"></div><script>const D=__PAYLOAD__;
 const c=echarts.init(document.getElementById('c'),'dark');

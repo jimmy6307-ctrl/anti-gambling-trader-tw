@@ -307,19 +307,28 @@ from broker_lib import Order, OrderSide, BrokerAdapter
 ALLOW_LIVE_TRADING = {allow_live}
 
 
+DEFAULT_CONFIG = {{
+    "market": {opts.market!r},
+    "symbols": {opts.symbols!r},
+    "broker": "paper",
+    "paper": {{"starting_cash": 1_000_000, "fee_rate": 0.001}},
+    "risk": {{"stop_loss_pct": 0.05, "take_profit_pct": 0.15,
+              "max_position_pct": 0.2}},
+}}
+
+
 def load_config(path: str = "config.yaml") -> dict:
     if not os.path.exists(path):
         # 沒有 config.yaml 時用內建預設(紙上模擬)
-        return {{
-            "market": {opts.market!r},
-            "symbols": {opts.symbols!r},
-            "broker": "paper",
-            "paper": {{"starting_cash": 1_000_000, "fee_rate": 0.001}},
-            "risk": {{"stop_loss_pct": 0.05, "take_profit_pct": 0.15,
-                      "max_position_pct": 0.2}},
-        }}
+        return dict(DEFAULT_CONFIG)
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    # 空檔或格式錯誤時 safe_load 回 None / 非 dict —— 直接用會 AttributeError。
+    # 誠實退回內建預設(紙上模擬)並提醒,而不是丟 traceback。
+    if not isinstance(data, dict):
+        print(f"⚠️ {{path}} 是空的或格式不對,改用內建預設(紙上模擬)。")
+        return dict(DEFAULT_CONFIG)
+    return data
 
 
 def maybe_enable_live(broker: BrokerAdapter, config: dict) -> None:
@@ -365,10 +374,13 @@ def run():
     all_markers = []
     equity_curve = []
     candles_for_chart = []
+    n_fills = 0
+    chart_symbol = symbols[-1] if symbols else ""   # 圖表以最後一檔為例
 
     for symbol in symbols:
         history = load_history(symbol)
-        candles_for_chart = history  # 圖表以最後一檔為例
+        if symbol == chart_symbol:
+            candles_for_chart = history
         for i in range(len(history)):
             window = history[: i + 1]
             bar = window[-1]
@@ -387,12 +399,18 @@ def run():
                 r = broker.place_order(Order(symbol, OrderSide.BUY, qty,
                                              client_tag=sig.reason))
                 if r.ok:
+                    n_fills += 1
+                # 圖表標記只收「被繪製那一檔」的訊號 —— 其他標的的標記
+                # 疊在別檔的 K 線上會畫錯位置,誤導判讀。
+                if r.ok and symbol == chart_symbol:
                     all_markers.append({{"time": bar["time"], "price": bar["low"],
                                          "side": "buy", "text": sig.reason or "買"}})
             elif sig.action == "sell" and pos is not None:
                 r = broker.place_order(Order(symbol, OrderSide.SELL, abs(pos.quantity),
                                              client_tag=sig.reason))
                 if r.ok:
+                    n_fills += 1
+                if r.ok and symbol == chart_symbol:
                     all_markers.append({{"time": bar["time"], "price": bar["high"],
                                          "side": "sell", "text": sig.reason or "賣"}})
 
@@ -403,7 +421,7 @@ def run():
     print("=" * 50)
     print(f"  策略執行完畢（{{config.get('broker')}} 模式）")
     print(f"  最終權益: {{acct.equity:,.2f}}")
-    print(f"  成交筆數: {{len(all_markers)}}")
+    print(f"  成交筆數: {{n_fills}}")
     print("=" * 50)
 
     out = render(candles_for_chart, all_markers, equity_curve,

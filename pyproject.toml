@@ -49,3 +49,8 @@ packages = [
     "core.montecarlo",
     "core.trend",
 ]
+
+# examples 隨套件打包:demo 與 analyze --example 依賴這些檔案,
+# 不打包的話 pip 安裝後的使用者第一個指令(demo)就會 FileNotFoundError。
+[tool.setuptools.package-data]
+core = ["examples/*.csv", "examples/*.json"]

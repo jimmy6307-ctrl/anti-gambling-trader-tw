@@ -31,6 +31,18 @@ from .patterns import SCAM_PATTERNS, ScamPattern, find_pattern
 # 零寬字元(U+200B/200C/200D、BOM、word joiner):詐騙文案可夾在關鍵字中間規避比對
 _ZERO_WIDTH = re.compile(r"[​‌‍⁠﻿]")
 
+# 簡體 → 繁體對照(防盲區):詐騙集團常用簡體發文(「保证获利」「老师带单」),
+# 而詞庫全為繁體 —— 實測簡體版核心話術原本 0 命中、判「低風險」,完全繞過偵測。
+# 只收「簡體專用字」(在繁體中不作為獨立常用字出現的),**刻意排除**
+# 干/里/面/后/发 這類簡繁共用但意義不同的字,避免誤改正常繁體文。
+# 涵蓋範圍 = 詞庫 + 警示詞 + 守門詞 + 自我否認詞實際用到的異形字。
+_S2T = str.maketrans(
+    "证获稳赚赔风险师带单报内线飙级进讯学员见图对帐账财冻缴税储砖载汇额时"
+    "错过没现场仅谢骗别当话术质举检诈团吗么断识请问这会机着",
+    "證獲穩賺賠風險師帶單報內線飆級進訊學員見圖對帳帳財凍繳稅儲磚載匯額時"
+    "錯過沒現場僅謝騙別當話術質舉檢詐團嗎麼斷識請問這會機著",
+)
+
 _SENTENCE_DELIM = re.compile(r"[。!?!?\n；;]+")
 
 # ── 話術詞庫:(片語, 對應的詐騙型態代碼, 權重) ────────────────
@@ -239,6 +251,9 @@ def scan_text(text: str) -> TextScanResult:
     # (b) 移除零寬字元:詐騙文案可在關鍵字中間夾 U+200B 等,肉眼看不出、比對卻失效
     norm = unicodedata.normalize("NFKC", raw)
     norm = _ZERO_WIDTH.sub("", norm)
+    # 簡→繁正規化:str.translate 是 1:1 等長替換,不位移任何 position,
+    # 因此 _sentence_spans 的座標對應不會壞;繁體輸入經過此步完全不變。
+    norm = norm.translate(_S2T)
     lower = norm.lower()
     sentences = _split_sentences(norm)
     sentence_spans = _sentence_spans(lower)

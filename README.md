@@ -223,7 +223,7 @@ core/
   charts/              # 四種開源圖表庫範本 + 樣式預覽
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
-examples/              # 三市場範例資料
+core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
 tests/                 # 8 個測試檔，134 個測試
 ```
 

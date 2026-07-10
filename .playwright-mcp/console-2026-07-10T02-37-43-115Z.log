@@ -1,0 +1,3 @@
+[     561ms] TypeError: c.addCandlestickSeries is not a function
+    at http://localhost:18742/chart.html:11:11
+[     575ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:18742/favicon.ico:0

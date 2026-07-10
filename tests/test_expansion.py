@@ -456,6 +456,91 @@ def test_loader_mixed_timezone_does_not_crash():
         assert ordered.trades[0].is_day_trade    # 帶時區的那筆是當沖
 
 
+# ══════ 第四輪巡檢(gpt-5.5 + grok-4.5 + opus4.8)修正的防退化測試 ══════
+def test_scanner_simplified_chinese_detected():
+    """簡體詐騙文原本 0 命中判「低」—— 詐騙集團常用簡體發文,不可有此盲區。"""
+    r = scan_text("老师带单保证获利,稳赚不赔,快升级VIP,名额有限,私讯我")
+    assert r.risk_level in ("高", "極高")
+    # 簡體反詐教育文的警示詞也要能觸發否定
+    r2 = scan_text("任何说保证获利的都是骗人的,千万不要相信,这是诈骗")
+    assert r2.risk_level not in ("高", "極高")
+    # 繁體行為完全不變(translate 對繁體是恆等)
+    r3 = scan_text("定期定額買 0050 是不錯的長期策略,不用擇時")
+    assert r3.risk_level not in ("高", "極高")
+
+
+def test_bootstrap_validates_and_caps():
+    """n_bootstrap < 1 要拋 ValueError(否則除零/空索引);大樣本自動降次數。"""
+    from core.verdict.statistics import MAX_BOOTSTRAP_DRAWS, test_expectancy_positive
+    try:
+        test_expectancy_positive([1.0, 2.0, 3.0], n_bootstrap=0)
+        assert False, "應拋 ValueError"
+    except ValueError:
+        pass
+    # 大樣本:20M 上限生效,不會跑滿 5000 次(用耗時間接驗證:< 25s 的舊行為)
+    import time
+    big = [float(i % 7 - 3) for i in range(10000)]
+    t0 = time.time()
+    test_expectancy_positive(big, n_bootstrap=5000)
+    assert time.time() - t0 < 10, "bootstrap 上限未生效(大樣本過慢)"
+    assert MAX_BOOTSTRAP_DRAWS == 20_000_000
+
+
+def test_examples_packaged_inside_core():
+    """examples 必須在 core/ 套件內(否則 pip 安裝後 demo 全壞)。"""
+    from core.cli import _examples_dir
+    d = _examples_dir()
+    assert d.name == "examples" and d.parent.name == "core"
+    assert (d / "tw_stock_gambling.csv").exists()
+
+
+def test_forensics_n_dropped_surfaced():
+    """NaN 剔除數必須揭露在 as_dict 與文字報告(不可靜默)。"""
+    from core.forensics import render_forensics
+    vals = [0.01] * 20 + [float("nan")] * 3
+    f = analyze_returns(vals)
+    assert f.n_dropped == 3
+    assert f.as_dict()["n_dropped"] == 3
+    assert "剔除" in render_forensics(f)
+
+
+def test_chart_cdn_pinned():
+    """CDN 必須鎖版:未鎖版的 lightweight-charts 已被 v5 破壞(移除 v4 API)。"""
+    from core.charts.registry import get_chart_lib
+    from core.charts import preview
+    lw = get_chart_lib("lightweight").module_code
+    assert "lightweight-charts@4" in lw, "lightweight 未鎖 v4"
+    assert "lightweight-charts@4" in preview._PREVIEW_TEMPLATE
+    ec = get_chart_lib("echarts").module_code
+    assert "echarts@5" in ec, "echarts 未鎖版"
+
+
+def test_mplfinance_template_markers_and_no_none_addplot():
+    """mplfinance 範本:標記要真的填值;無訊號時不可傳 addplot=None(會 TypeError)。"""
+    src = None
+    from core.charts.registry import get_chart_lib
+    src = get_chart_lib("mplfinance").module_code
+    assert "addplot=addplots or None" not in src   # 舊寫法會讓無訊號的專案崩潰
+    assert "pos_of" in src and 'buy_y[i] = m["price"]' in src   # 標記真的被填
+    import ast
+    ast.parse(src)
+
+
+def test_cli_stdin_utf8_no_silent_miss():
+    """Windows cp950 stdin 管線不得靜默漏抓詐騙(反詐工具最諷刺的失敗)。"""
+    import os
+    import subprocess
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    r = subprocess.run(
+        [sys.executable, "-m", "core.cli", "scan-text"],
+        input="老師帶單保證獲利,穩賺不賠,快升級VIP".encode("utf-8"),
+        capture_output=True, env=env,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert r.returncode == 2, "UTF-8 stdin 的詐騙文應判高風險(exit 2)"
+
+
 if __name__ == "__main__":
     import traceback
 

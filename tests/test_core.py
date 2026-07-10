@@ -24,7 +24,7 @@ from core.verdict.statistics import (  # noqa: E402
     test_expectancy_positive as check_expectancy_positive,
 )
 
-EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+EXAMPLES = Path(__file__).resolve().parent.parent / "core" / "examples"
 
 
 def _make_trade(pnl: float, *, win_days: float = 1.0, tag: str | None = None) -> Trade:

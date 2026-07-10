@@ -98,8 +98,8 @@ _PREVIEW_TEMPLATE = """<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>反詐投資王 — 圖表樣式預覽</title>
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 <style>
 :root{color-scheme:dark}
 body{margin:0;background:#0d0f14;color:#d1d4dc;font-family:system-ui,"Microsoft JhengHei",sans-serif}
