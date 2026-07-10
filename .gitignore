@@ -27,3 +27,6 @@ my_strategy.py
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 驗證工具的除錯輸出
+.playwright-mcp/
