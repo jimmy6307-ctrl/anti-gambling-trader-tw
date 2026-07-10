@@ -107,6 +107,27 @@ def _analyze_with_overrides(target, market_hint, args, field_overrides):
     )
 
 
+def _compute_full_extras(result, equity):
+    """--full 健檢:算出趨勢報告與風險情境(scenario 可為 None = 樣本不足)。"""
+    from .montecarlo import simulate_ruin_scenario
+    from .trend import analyze_trend
+
+    trend_report = analyze_trend(result.log)
+    pnls = [t.pnl or 0.0 for t in result.log]
+    scenario = simulate_ruin_scenario(pnls, start_equity=equity)
+    return trend_report, scenario
+
+
+def _render_trend(report) -> str:
+    from .trend import render_trend_text
+    return render_trend_text(report)
+
+
+def _render_scenario(s) -> str:
+    from .montecarlo import render_scenario
+    return render_scenario(s)
+
+
 def _print_next_steps(result, args, target) -> None:
     """依裁決結果,動態提示使用者接下來能做什麼。"""
     print("\n" + "─" * 70)
@@ -119,11 +140,19 @@ def _print_next_steps(result, args, target) -> None:
     else:
         print(f"  • 想把這套邏輯變成可回測程式?執行 "
               f"anti-gambling-trader scaffold --from-analysis {target}")
+    # 可發現性:analyze 只是體檢的第一步,主動導流到趨勢與風險情境
+    if not getattr(args, "full", False):
+        print(f"  • 想看月報趨勢、優勢是否在衰退?執行 anti-gambling-trader trend {target}")
+        print(f"  • 想模擬「這樣玩下去會不會爆倉」?執行 "
+              f"anti-gambling-trader risk-sim {target} --equity 你的本金")
+        print("  • 或一次看完:analyze 加上 --full(主報告 + 趨勢 + 風險情境)")
     extras = []
     if not args.strategy:
         extras.append("--strategy out.py(產生可回測策略骨架)")
     if not args.json:
         extras.append("--json out.json(存結構化結果)")
+    if not args.html and not args.card:
+        extras.append("--html 報告.html / --card 圖卡.html(可傳給家人的成品)")
     if extras:
         print(f"  • 本次只顯示報告。可加:{' / '.join(extras)}")
     print("─" * 70)
@@ -226,6 +255,14 @@ def _build_parser() -> argparse.ArgumentParser:
     a.add_argument("--html", metavar="PATH", help="輸出自包含的 HTML 報告(可存檔分享)")
     a.add_argument(
         "--card", metavar="PATH", help="輸出分享圖卡 HTML(截圖傳給家人的鐵證)"
+    )
+    a.add_argument(
+        "--full", action="store_true",
+        help="一鍵全身健檢:主報告後附上月報趨勢(trend)與風險情境模擬(risk-sim)",
+    )
+    a.add_argument(
+        "--equity", type=float, default=None,
+        help="起始權益,供 --full 的風險情境模擬;未給則粗估並醒目警示",
     )
     a.add_argument(
         "--bootstrap", type=int, default=5000, help="bootstrap 重抽次數(預設 5000)"
@@ -391,6 +428,19 @@ def main(argv: list[str] | None = None) -> int:
         # 終端機輸出完整報告
         print(result.text_report)
 
+        # --full:一鍵全身健檢,附上月報趨勢與風險情境
+        full_extras = None
+        if args.full:
+            full_extras = _compute_full_extras(result, args.equity)
+            trend_report, scenario = full_extras
+            print()
+            print(_render_trend(trend_report))
+            print()
+            if scenario is not None:
+                print(_render_scenario(scenario))
+            else:
+                print("(交易不足 10 筆,略過風險情境模擬 —— 樣本太少,模擬只會給假精準。)")
+
         if args.json:
             Path(args.json).write_text(
                 json.dumps(result.as_dict(), ensure_ascii=False, indent=2),
@@ -410,7 +460,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.html:
             from .report_html import render_html_report
 
-            Path(args.html).write_text(render_html_report(result), encoding="utf-8")
+            # --full 時把趨勢與風險情境一併帶進 HTML(警語隨區塊自動進入)
+            trend_r, scen = full_extras if full_extras else (None, None)
+            Path(args.html).write_text(
+                render_html_report(result, trend=trend_r, scenario=scen),
+                encoding="utf-8",
+            )
             print(f"[已輸出 HTML 報告] {args.html}(用瀏覽器打開)")
 
         if args.card:

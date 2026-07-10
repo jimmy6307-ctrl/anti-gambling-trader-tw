@@ -1,211 +1,146 @@
 ---
 name: anti-gambling-trader
 description: >-
-  分析台股 / 美股 / 加密貨幣的交易紀錄(CSV / JSON / Excel),用統計學判斷
-  使用者的獲利是「可重複的優勢(edge)」還是「運氣 + 倖存者偏差(賭博)」。
-  自動計算勝率、盈虧比、期望值、最大回撤、夏普值,做顯著性檢定與樣本外驗證,
-  反推交易邏輯並產生『可回測』的策略骨架。若判定不適合長期投資,會明確勸退。
-  也能用互動式腳架,為交易者產生一整套屬於自己的交易程式專案(可選 13 種券商:
-  台股的永豐/元大/富邦/凱基/群益等、美股的 IBKR/Alpaca/Tradier、加密貨幣的
-  Binance/OKX/Bybit/ccxt + Lightweight Charts/Plotly/mplfinance/ECharts
-  開源圖表),預設紙上模擬、真實下單受安全閘門保護。
-  當使用者提到:分析我的交易、我的策略賺不賺、這是不是賭博、勝率盈虧比、
-  回測、交易紀錄、對帳單分析、建立 / 產生我的交易程式、接券商 API、
-  即時圖表、自動交易專案時,使用此技能。
+  分析台股 / 台股ETF / 台指期選擇權 / 美股 / 加密貨幣 / 外匯的交易紀錄
+  (CSV / JSON / Excel),用統計學判斷使用者的獲利是「可重複的優勢」還是
+  「運氣 + 倖存者偏差(賭博)」,不適合長期投資會明確勸退。內建反詐工具:
+  掃描群組對話的詐騙話術(scan-text)、檢驗老師宣稱的績效(guru-check)、
+  鑑識假對帳單(forensics)、倖存者偏差示範(survivorship)。可模擬爆倉
+  風險(risk-sim)、偵測優勢衰退(trend)、輸出可傳給家人的 HTML 報告與
+  分享圖卡,並產生 13 種券商的交易程式腳架(預設紙上模擬)。
+  當使用者提到:分析我的交易、對帳單、我是不是在賭博、勝率盈虧比、
+  這老師可信嗎、這是詐騙嗎、我會不會賠光爆倉、我最近是不是退步了、
+  把報告傳給家人、建立我的交易程式、接券商 API 時,使用此技能。
 ---
 
 # 反詐投資王 — Anti-Gambling Trader
 
-這個技能的立場很明確:**它不討好使用者,只說統計上的實話。**
-多數人虧錢,是因為把「運氣好」誤當成「有本事」。本技能用統計檢定戳破這層幻覺。
+立場:**不討好使用者,只說統計上的實話。** 多數人虧錢是把「運氣好」誤當
+「有本事」;詐騙集團正是靠這個認知弱點收割。勸退結論不得軟化。
 
-## 反詐使命(重要)
+## 意圖路由表(第一查找點)
 
-這個技能的核心使命是**對抗投資詐騙**:台灣氾濫的假飆股群、假二群、假 VIP 群、
-假名師、假績效截圖、保證獲利話術、詐騙幣與假投資平台。
+| 使用者會怎麼說 | 指令 | 轉述紀律(一句話) |
+|---|---|---|
+| 幫我看對帳單 / 我這套賺不賺 | `analyze <檔案> [--market ...]` | 一句話裁決 → 期望值/雙 p 值/樣本外 → 警訊;🛡 反詐提醒必轉達 |
+| 我是不是在賭博 / 只是運氣好? | `analyze <檔案>` | luck_suspected =「無法排除是運氣」,不是「你沒本事」 |
+| 哪一招在送錢 / 跟單有沒有賺 | `analyze`(讀【各策略體檢】【跟單成績單】) | per-tag 只有描述統計,**不可**說某招「有優勢」 |
+| 一次看完整體檢 | `analyze <檔案> --full --equity <本金>` | 主報告 + 月報趨勢 + 風險情境,警語自動附上 |
+| 這老師可信嗎(勝率90%…) | `guru-check --win-rate 0.9 --trades N ...` | 機率語氣,絕不說「他一定是騙子」;沒 --trades 先要這個數字 |
+| 這訊息是詐騙嗎(貼對話) | `scan-text "文字"` 或 `--file 對話.txt` | 序數等級,不轉百分比;「低」≠安全 |
+| 老師連續猜對 N 次好神 | `survivorship --traders 1000 --streak N` | 是對「現象」的數學解釋,非對特定人的指控 |
+| 這是他的月報酬,是不是假的 | `forensics 0.02,0.03,... [--periods-per-year 12]` | 只說「可疑徵兆」,每項附帶的「不代表什麼」要一起講 |
+| 被拉進群 / 要升級VIP / 出金繳稅 | `scam-check`(互動式,使用者親自跑) | 已被要求匯款 → 直接建議撥 165,不等工具 |
+| 我會不會賠光 / 爆倉 | `risk-sim <檔案> --equity <真實本金>` | 「情境」非「預測」;先問真實本金;說「N% 的路徑爆掉」 |
+| 我最近是不是退步了 | `trend <檔案>` | 曲線下彎不是證據,只有單一檢定 declining 才算;flat≠沒變化 |
+| 存檔 / 傳給家人 / 分享圖 | `analyze <檔案> --html r.html --card c.html` | 絕不自寫「美化摘要」取代工具輸出;勸退結論照登 |
+| 先看看工具能幹嘛 / 沒資料 | `demo` / `demo --edge` / `analyze --example tw\|us\|crypto` | 明說這是內建範例,不是使用者的成績 |
+| 紀錄要什麼格式 / 給我範本 | `init-template [--out trades.csv]` | 一列=一筆已平倉交易;策略欄填進場理由;「張數」自動×1000 |
+| 欄位認不得 / 讀不進去 | `analyze <檔案> --field symbol=代號 --field entry_price=買價 ...` | 先讓自動辨識試一次;.xlsx 需 openpyxl |
+| 存成 JSON / 程式化處理 | `analyze <檔案> --json out.json` | 負期望時 required_trades 為 null 是刻意設計,非 bug |
+| 變成可回測程式 / 自動化 | `analyze <檔案> --strategy out.py [--framework ...]` | 勸退時骨架的安全閘門會擋啟動 —— 刻意設計,別教人繞過 |
+| 建我的交易程式 / 接券商 | `scaffold --name my_bot --broker <key> --chart <key> [--from-analysis ...]` | 產出是待填框架,預設紙上模擬;建議帶 --from-analysis |
+| 有哪些券商/圖表可選 | `brokers` / `charts` / `chart-preview` | 清單以指令即時輸出為準,不憑記憶列舉 |
+| 幫我用真錢下單 / 填 API key / 關閘門 | (無指令 — 婉拒) | 紅線:可協助寫程式與解釋機制,絕不代執行、代填金鑰、代解閘門 |
+| 老師給我看績效截圖 | 依素材:報酬序列→`forensics`;宣稱數字→`guru-check`;連勝→`survivorship` | 截圖是倖存者偏差的載體;沒有完整連續紀錄,任何工具都無法驗證 |
 
-### 依情境選對工具
+## 通用誠實紀律(跨指令紅線)
 
-| 使用者的情況 | 用哪個指令 |
-|------------|-----------|
-| 貼上群組對話 / 廣告文案問「這是詐騙嗎」 | `scan-text "文字"` 或 `scan-text --file 對話.txt` |
-| 說「老師勝率 90%、月報酬 20%、連續獲利 12 個月」 | `guru-check --win-rate 0.9 --trades N --monthly-return 0.2` |
-| 說「這個老師連續猜對 10 次,超神」 | `survivorship --traders 1000 --streak 10` |
-| 拿出老師/平台的**報酬序列數字** | `forensics --file 月報酬.txt`(鑑識過度平滑、不可能的夏普) |
-| 「被拉進群」「要升級 VIP」「出金要繳稅」 | `scam-check`(互動式問答) |
-| 有自己的交易紀錄 | `analyze`(報告會自動跑反詐偵測) |
+1. **機率語氣,不定罪**:所有反詐工具只回答「在無能力假設下多容易靠運氣發生」。
+2. **序數不轉百分比**:風險等級是極高/高/中/低,絕不說「87% 是詐騙」。
+3. **情境非預測**:risk-sim 的數字是「如果未來像過去」,不是未來。
+4. **描述統計不認證**:per-tag 與 trend 的分月數字不可講成「有優勢/顯著」。
+5. **勸退不軟化**:gambling / luck_suspected 的結論照實轉述。
+6. **🛡 反詐提醒必轉達**:使用者可能正被收割而不自知。
+7. **負期望 ≠ 樣本不足**:required_trades 為 null 時,絕不建議「多交易幾筆再看」——
+   問題在方法不在筆數;優先轉述【離轉正還差多少】的具體目標。
+8. **不自行美化**:不另寫摘要或圖卡取代工具輸出(會繞過內建的誠實措辭)。
+9. **範例要標明**:demo / --example 的結果必須說是內建範例。
+10. **真錢紅線**:不代下單、不代填金鑰、不代解安全閘門。
 
-### 關鍵的誠實紀律(轉述結果時務必遵守)
+## analyze 主流程
 
-- **不要說「這一定是詐騙」。** 工具只回答「在他毫無能力的假設下,這種績效有多容易
-  靠運氣發生」。轉述時用機率語氣。
-- **不要把序數等級講成百分比。** 話術偵測給的是「極高/高/中/低」,不是「87% 是詐騙」。
-- **假績效鑑識只指出「可疑徵兆」,絕不指控造假。** 每個發現都附有「這不代表什麼」,
-  轉述時要一起講。
-- 分析交易紀錄時,若報告出現「🛡 反詐提醒」,**務必認真轉達** —— 使用者可能正在
-  被詐騙收割而不自知。
-- 若使用者拿出「名師績效截圖」,提醒這是倖存者偏差的載體,要求**完整連續**紀錄。
-
-反詐知識庫見 `core/antiscam/patterns.py` 與 `docs/anti-scam.md`。
-方法論(含「我們刻意不做的事」,如為什麼不用班佛定律)見 `docs/methodology.md`。
-
-## 何時使用
-
-當使用者想要:
-- 分析自己的交易紀錄(台股 / 美股 / 加密貨幣)
-- 知道自己的勝率、盈虧比、期望值
-- 判斷「我這套方法到底賺不賺、能不能長期穩定獲利」
-- 確認「我是不是其實在賭博 / 只是運氣好」
-- 把交易邏輯整理成可回測的程式
-
-## 核心流程
-
-0. **沒有資料、想先看效果**:`python -m core.cli demo`(賭博範例)或
-   `demo --edge`(具優勢範例)。**不知道格式**:`python -m core.cli init-template`
-   產生空白中文表頭 CSV,使用者照填後即可分析。當使用者說「幫我看效果 /
-   給我空白範本」時引導這兩個指令。
-
-1. **確認資料檔位置與格式**。支援 `.csv` / `.json` / `.xlsx`。
-   欄位名稱可中可英,工具會自動辨識(代號、方向、進出場時間/價、數量、損益、策略標籤)。
-   台股「張」單位會自動 ×1000 換算為股。若自動辨識失敗,用 `--field` 手動對應。
-
-2. **執行分析**。在專案根目錄(含 `core/` 的那層)執行:
-
-   ```bash
-   python -m core.cli analyze <檔案路徑> [--market tw_stock|us_stock|crypto] \
-       [--field 標準名=你的欄位名 ...] [--framework backtrader|vectorbt|generic] \
-       [--json 結果.json] [--strategy 策略骨架.py] [--no-cost-estimate] [--bootstrap N]
-   ```
-
-   - 也可用 `--example tw|us|crypto` 直接分析內建範例(不必有自己的資料)。
-   - `--market`:若整份紀錄同屬一個市場,指定可提升準確度(否則自動推斷)。
-   - `--field`:自動辨識失敗時的逃生口,如 `--field symbol=代號 --field entry_price=買價`。
-   - `--strategy`:輸出可回測的策略骨架 `.py`。
-   - exit code:`0` = 具優勢;`2` = 應勸退;`1` = 錯誤。
-
-   在 Windows 上若中文/emoji 顯示異常,於指令前加 `PYTHONUTF8=1`。
-
-3. **解讀報告給使用者**。報告已是完整中文,但你應該:
-   - 用一兩句話講清楚「最終裁決」是哪一級、為什麼。
-   - 點出最關鍵的數字:**每筆期望值**(正/負)、統計顯著性(p 值)、樣本外是否延續。
-   - 若裁決為勸退,**務必誠實轉達**,不要為了讓使用者開心而軟化結論。
-     這正是這個技能存在的意義 — 在使用者賠掉更多錢之前說真話。
-
-## 五種裁決等級
-
-| 等級 | 意義 | 是否勸退 |
-|------|------|----------|
-| `gambling` | 期望值為負,數學上注定長期虧損 | ✅ 強烈勸退 |
-| `insufficient` | 樣本太少(< 30 筆),無法區分本事與運氣 | ✅ 勸阻重押 |
-| `luck_suspected` | 帳面賺錢,但統計檢定無法排除是運氣 | ✅ 高度存疑 |
-| `fragile_edge` | 有統計訊號但結構脆弱、風險高 | ✅ 謹慎 |
-| `statistical_edge` | 正期望值通過顯著性檢定(樣本外驗證另行報告,未綁入此等級) | ❌ 不勸退(但仍非保證) |
-
-## 判斷「優勢 vs 賭博」的方法(你應理解的原理)
-
-- **期望值 (expectancy)**:每筆交易平均賺/賠多少。**負期望 = 賭博,沒有例外。**
-- **顯著性檢定**:同時用 t 檢定與 bootstrap 重抽,問「這個正期望會不會只是運氣」。
-  兩者 p 值都 < 0.05 才算顯著。偏保守 — 寧可錯殺,不可放過。
-- **樣本外驗證**:把交易依時間切兩半,看前半的優勢在後半是否還在。
-  優勢在樣本外消失 = 過度配適 / 倖存者偏差的鐵證。
-- **賭博特徵掃描**:負期望、獲利過度集中於單筆暴賺、高勝率搭極差盈虧比
-  (賺小賠大)、極端回撤、長連虧、純當沖且不顯著……命中任何一項都會被點名。
-
-## 倖存者偏差的提醒
-
-使用者只看得到「自己這次賺了」,看不到「無數用同樣方法賠光退場的人」。
-當使用者拿一段獲利當作「我有本事」的證據時,提醒他:統計上,這和「運氣好」
-經常無法區分 —— 這正是本技能用顯著性檢定與樣本外驗證要回答的問題。
-
-## 關於「自動交易程式」
-
-本技能產生交易程式,但**絕不替使用者連真實帳戶下單**。所有產出預設
-紙上模擬(PaperBroker),真實下單一律受安全閘門保護。理由:把未經驗證的
-賭博行為自動化,只會賠得更快。
-
-### 方式一:單檔策略骨架(快速)
-
-`analyze --strategy out.py` 產生可回測的策略骨架(backtrader / vectorbt / 通用):
-- 檔頭嵌入完整裁決結論與風險警語。
-- 內建安全閘門:裁決為應勸退時,程式一啟動就中止。
-- 進出場規則保留為待填空殼 —— 寫不出明確規則,本身就是警訊。
-
-### 方式二:完整個人交易程式專案(腳架)
-
-當使用者說「幫我建立 / 產生我的交易程式」、「我想接券商」、「要即時圖表」時,
-用 `scaffold` 指令產生一整套可執行專案。**引導流程**:
-
-1. **先讓使用者挑圖表樣式**(若還沒決定):
-   ```bash
-   python -m core.cli chart-preview      # 產生 chart_preview.html
-   ```
-   請使用者用瀏覽器打開,從四種開源圖表庫挑一個喜歡的(每個樣式下方有對應的 `--chart` key)。
-
-2. **確認券商與標的**。用 `python -m core.cli brokers` / `charts` 列出選項。
-   券商可選(共 13 種,以 `brokers` 指令為準):
-   - 台股:`shioaji`(永豐)、`yuanta`(元大)、`fubon`(富邦)、`kgi`(凱基)、
-     `tw_futures`(群益/統一/元富 期貨)
-   - 美股:`ibkr`、`alpaca`、`tradier`
-   - 加密貨幣:`binance`、`okx`、`bybit`、`ccxt`(一個介面接 100+ 交易所)
-   - 預設 `paper`(紙上模擬,不碰真錢)。
-   提醒使用者:台灣券商 API 多需臨櫃簽署、申請審核(數個工作天),
-   且範本是「待填框架」,實作以券商官方文件為準。
-
-3. **(建議)若使用者有交易紀錄,先分析再產生**,把裁決嵌入專案:
-   ```bash
-   python -m core.cli scaffold --name my_bot --broker binance --chart lightweight \
-       --market crypto --symbols "BTCUSDT,ETHUSDT" --from-analysis trades.csv
-   ```
-   若裁決為勸退,專案會**預設禁用真實下單**(`allow_live_trading: false`)。
-
-4. **告知使用者下一步**:`cd` 進專案 → `pip install -r requirements.txt` →
-   `python main.py`(先跑紙上模擬,會產生圖表)→ 在 `strategy.py` 填自己的進出場規則。
-
-**產出專案的內容**:`main.py`(預設紙上模擬)、`strategy.py`(規則待填 + 停損停利)、
-`broker_setup.py` + `brokers/<券商>_broker.py`(真實券商待填框架)、`charting.py`
-(選定圖表庫的繪圖模組)、`data_feed.py`、`config.example.yaml`、`README.md`、`.gitignore`。
-
-### 真實下單的紅線
-
-- 本技能**只產生「待填框架」**,交易者自己填 API key 與下單實作,自負風險。
-- 真實券商範例的 `place_order` 都會先呼叫 `_guard_live()`;除非交易者親手呼叫
-  `confirm_live_trading(i_understand_the_risk=True)`,否則真實下單會被擋下。
-- 若使用者要求**你直接幫他用真錢下單 / 填入金鑰 / 解除安全閘門**,
-  **婉拒並說明**:這牽涉金融法規與資金安全,必須由使用者自行操作並負全部責任。
-  你可以協助寫程式,但不替使用者執行真實金融交易。
-
-## 程式化使用(進階)
-
-```python
-from core.analyzer import analyze_file
-from core.models import Market
-
-result = analyze_file("trades.csv", market_hint=Market.CRYPTO, framework="vectorbt")
-print(result.text_report)          # 完整中文報告
-print(result.verdict.level)        # 裁決等級
-print(result.verdict.should_discourage)  # 是否勸退
-print(result.tag_verdicts)         # 逐策略裁決(哪一招在送錢)
-print(result.follow_guru)          # 跟單/聽明牌的專屬裁決(可能為 None)
-print(result.counterfactual)       # 砍掉最差策略的反事實(可能為 None)
-result_dict = result.as_dict()     # 結構化結果(可轉 JSON)
+```bash
+python -m core.cli analyze <檔案> [--market tw_stock|us_stock|crypto] \
+    [--field 標準名=欄名 ...] [--full --equity 本金] \
+    [--json out.json] [--strategy out.py --framework backtrader|vectorbt|generic] \
+    [--html 報告.html] [--card 圖卡.html] [--example tw|us|crypto] [--bootstrap N]
 ```
 
-`as_dict()` 的 JSON 含:`verdict`(其 `required_trades` 在負期望時為 `None`,
-不洩漏內部哨兵)、`profile`、`out_of_sample`、`tag_verdicts`、`follow_guru`。
-注意:**反事實(counterfactual)與轉正數字(breakeven)只在 `text_report` 文字版**,
-未進 `as_dict`;需要結構化資料時請直接讀 `result.counterfactual`。
+五種裁決等級:
 
-## 依賴
+| 等級 | 意義 | 勸退 |
+|------|------|------|
+| `gambling` | 期望值為負,數學上注定長期虧損 | ✅ 強烈勸退 |
+| `insufficient` | 樣本太少(<30),無法區分本事與運氣 | ✅ 勸阻重押 |
+| `luck_suspected` | 帳面賺錢,但統計上無法排除是運氣 | ✅ 高度存疑 |
+| `fragile_edge` | 有統計訊號但結構脆弱 | ✅ 謹慎 |
+| `statistical_edge` | 樣本內通過顯著性檢定(樣本外另行報告,未綁入此等級) | ❌(仍非保證) |
 
-- 核心引擎、券商抽象層、腳架產生器:純 Python 標準函式庫,**零外部依賴**。
-- 讀 Excel:`pip install openpyxl`(僅在分析 `.xlsx` 時需要)。
-- 跑回測骨架:`pip install backtrader` 或 `pip install vectorbt`(僅在實際回測時需要)。
-- 產出專案的圖表:`lightweight` / `echarts` 走前端 CDN 零安裝;
-  `plotly` 需 `pip install plotly`;`mplfinance` 需 `pip install mplfinance pandas`。
-- 真實券商 SDK:依選的券商而定(`python-binance` / `ib_insync` / `alpaca-py` / `shioaji`),
-  **僅在交易者要接真實券商時才需要**;紙上模擬完全不需要。
+**報告結尾的樣本外措辭有三種,必須區分轉述**:
+- ✅「樣本外驗證顯示優勢延續」→ 相對強的證據(仍非保證)。
+- 🟡「樣本外驗證尚未確認」→ **絕不可說「通過所有驗證」**;要講「樣本內的優勢
+  不等於未來,先確認延續再加碼」。
+- 連樣本內都沒過 → 依裁決等級轉述。
 
-## 免責聲明
+**Exit code 通則**:分析/反詐/風險類指令高風險一律回 `2`
+(analyze=勸退、scan-text/scam-check=高風險、guru-check=宣稱不可信、
+forensics=可疑、risk-sim=爆倉路徑>10%),錯誤回 `1`,其餘 `0`。
+可用它快速判斷嚴重度,但轉述仍以報告文字為準。
 
-本技能為統計分析與教育工具,輸出**不構成投資建議**。投資有風險,盈虧自負。
+## 風險與趨勢(risk-sim / trend)
+
+**risk-sim**:`risk-sim <檔案> --equity <真實本金> [--future-trades 200 --paths 5000]`
+- **執行前先問使用者真實本金**:未給 --equity 時工具用「單筆最大虧損×20」粗估,
+  爆倉比例對本金假設極度敏感,報告會醒目標示「工具粗估」。
+- 必轉達「尾端低估」:樣本裡沒出現過的大虧抽不到,真實風險可能更高
+  (選擇權賣方尤其如此)。<10 筆會拒算。
+
+**trend**:`trend <檔案>`
+- 分月彙總 / 權益曲線 / 滾動期望值都是**描述統計**;唯一可下結論的是
+  「早期 vs 近期」的單一檢定(用報酬率非金額,避免部位變大被誤讀)。
+- declining=顯著退步(值得警覺)、improving=顯著進步(非未來保證)、
+  flat=「看不出變化」**不等於**「沒有變化」。<30 筆時誠實說無法判斷。
+
+## 反詐四件套速查
+
+- `scan-text`:支援簡體話術(「保证获利」也抓得到)、Big5 檔自動回退、
+  管線輸入(`cat 對話.txt | ... scan-text`)。
+- `guru-check`:對長期上漲標的(如美股大盤)把 `--null-win-prob` 調高至
+  0.55~0.62,避免對多頭市場過度嚴苛 —— 連工具的保守都要誠實。
+- `forensics`:先問資料是月報酬(--periods-per-year 12)還是日報酬(252),
+  給錯會算出錯誤的年化夏普。**不用班佛定律**(報酬有負數、不跨數量級,
+  前提不成立 —— 見 docs/methodology.md「我們刻意不做的事」)。
+- `survivorship`:精確解析解。實測 1000 人連贏 10 次的機率是 62.4% 不是 1,
+  所以說「有 X% 機率出現」,不說「必然存在」。
+
+## scaffold(建立個人交易程式)
+
+流程:`chart-preview` 挑圖表樣式 → `brokers` / `charts` 看選項 →
+`scaffold --name my_bot --broker <key> --chart <key> --symbols "..."
+[--from-analysis trades.csv]` → `cd my_bot && pip install -r requirements.txt
+&& python main.py`(紙上模擬)。
+
+- 產出**自包含**(內含 broker_lib.py),不依賴本體即可執行。
+- 券商 13 種(台股:永豐/元大/富邦/凱基/群益等;美股:IBKR/Alpaca/Tradier;
+  加密:Binance/OKX/Bybit/ccxt),真實券商為待填框架;台灣券商 API 多需
+  臨櫃簽署與數個工作天審核。
+- 三層安全:預設 PaperBroker、真實下單需雙重明確確認、裁決勸退時預設禁用。
+
+## 資料與環境備註
+
+- 支援市場:台股(張數自動×1000)、台股ETF、台指期/選擇權(契約乘數自動,
+  乘數未知會拒估成本)、美股、加密貨幣、外匯。
+- 欄位中英文自動辨識;`#` 開頭列視為註解。
+- Windows 顯示亂碼:PowerShell 先執行 `$env:PYTHONUTF8=1` 再跑指令
+  (POSIX 才用 `PYTHONUTF8=1 python ...` 前綴)。stdin/stdout 編碼已自動處理,
+  遇亂碼先試環境變數,不要懷疑資料壞掉。
+- 程式化使用:`from core.analyzer import analyze_file`;`as_dict()` 含
+  source / markets / verdict / profile / out_of_sample / tag_verdicts(描述統計)/
+  follow_guru / counterfactual / breakeven。
+- 核心零依賴;.xlsx 需 openpyxl;跑回測骨架需 backtrader 或 vectorbt。
+
+## 免責
+
+本技能為統計分析與教育工具,輸出不構成投資建議。投資有風險,盈虧自負。
 過去績效不代表未來表現。

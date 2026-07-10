@@ -83,8 +83,18 @@ def _verdict_color(level: str) -> str:
     }.get(level, "#6b7280")
 
 
-def render_html_report(result, *, title: str = "反詐投資王 — 交易績效誠實報告") -> str:
-    """把 AnalysisResult 渲染成自包含 HTML。純 passthrough,不新增任何結論。"""
+def render_html_report(
+    result,
+    *,
+    title: str = "反詐投資王 — 交易績效誠實報告",
+    trend=None,
+    scenario=None,
+) -> str:
+    """把 AnalysisResult 渲染成自包含 HTML。純 passthrough,不新增任何結論。
+
+    trend / scenario 為 --full 健檢時的選配區塊(TrendReport / RuinScenario);
+    預設 None 保持精簡 —— HTML 報告的定位是「傳給家人的鐵證」,不稀釋裁決。
+    """
     v = result.verdict
     m = result.metrics
     oos = result.out_of_sample
@@ -128,6 +138,50 @@ def render_html_report(result, *, title: str = "反詐投資王 — 交易績效
         f'<li><b>[{h(rf.severity)}]</b> {h(rf.message)}</li>' for rf in v.red_flags
     )
     flags_html = f"<h2>偵測到的警訊</h2><ul>{flags}</ul>" if flags else ""
+
+    # --full 選配區塊:月報趨勢(沿用 reliability 三態,不足的桶誠實不判讀)
+    trend_html = ""
+    if trend is not None and trend.buckets:
+        rows = ""
+        for b in trend.buckets:
+            if b.reliability == "too_few":
+                wr, exp = "—", "—"
+                note = "資料不足,不判讀"
+            else:
+                wr = f"{b.win_rate:.0%}"
+                exp = f"{b.expectancy:,.2f}"
+                note = "樣本少,僅供參考" if b.reliability == "low" else ""
+            rows += (
+                f"<tr><td>{h(b.period_label)}</td><td class='num'>{b.n_trades}</td>"
+                f"<td class='num'>{h(wr)}</td><td class='num'>{h(exp)}</td>"
+                f"<td class='num'>{b.total_pnl:,.2f}</td><td>{h(note)}</td></tr>"
+            )
+        trend_html = (
+            f"<h2>月報趨勢</h2>"
+            f"<table><thead><tr><th>期間</th><th>筆數</th><th>勝率</th>"
+            f"<th>每筆期望值</th><th>總損益</th><th>備註</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+            f"<p>{h(trend.decay.headline)}</p>"
+            f'<p class="muted">分月數字為描述統計;「看起來在跌」不是衰退證據,'
+            f"以上方單一檢定的結論為準。</p>"
+        )
+
+    # --full 選配區塊:風險情境(警語必須跟著進來,不可只給數字)
+    scenario_html = ""
+    if scenario is not None:
+        warn_items = "".join(f"<li>{h(w)}</li>" for w in scenario.warnings)
+        inferred = "(⚠️ 工具粗估,非真實帳戶)" if scenario.start_equity_inferred else ""
+        scenario_html = (
+            f"<h2>風險情境模擬(如果未來長得像過去)</h2>"
+            f"<table><tbody>"
+            f"<tr><td>起始權益</td><td class='num'>{scenario.start_equity:,.0f} {h(inferred)}</td></tr>"
+            f"<tr><td>爆倉路徑比例</td><td class='num'>{scenario.ruin_fraction:.1%}</td></tr>"
+            f"<tr><td>最大回撤(中位數 / 最壞 5%)</td>"
+            f"<td class='num'>{scenario.median_max_drawdown:.0%} / {scenario.p95_max_drawdown:.0%}</td></tr>"
+            f"<tr><td>連虧 10 次的機率</td><td class='num'>{scenario.losing_streak_10_prob:.1%}</td></tr>"
+            f"</tbody></table>"
+            f'<div class="alert"><b>這是「情境」不是「預測」:</b><ul>{warn_items}</ul></div>'
+        )
 
     sig = v.significance
     pnls = [t.pnl or 0.0 for t in result.log]
@@ -196,6 +250,8 @@ color:#6b7280;font-size:12px}}
 {tag_table}
 {guru}
 {oos_html}
+{trend_html}
+{scenario_html}
 
 <div class="disclaimer">
 本報告為統計分析工具的輸出,僅供教育與研究用途,<b>不構成任何投資建議</b>。<br>

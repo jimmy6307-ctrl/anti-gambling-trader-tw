@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 from .profiler import StrategyProfile
 from ..verdict.judge import Verdict
 
@@ -45,28 +47,34 @@ def _verdict_banner(verdict: Verdict) -> str:
 
 
 def _entry_logic_hint(profile: StrategyProfile) -> str:
-    """依風格給出進場邏輯的程式碼提示(留待使用者具體化)。"""
+    """依風格給出進場邏輯的程式碼提示(留待使用者具體化)。
+
+    回傳**零縮排**的多行字串;各模板插入點的縮排深度不同
+    (backtrader 在 `if not self.position:` 內需 12 格、generic 在函式本體需 4 格),
+    由 generate_skeleton() 用 textwrap.indent() 各自套上。
+    先前硬編 8 格導致兩個模板產出的骨架都是 IndentationError、無法編譯。
+    """
     code = profile.style_code
     if code in ("scalp_intraday", "swing_short"):
         return (
-            "        # 你的交易偏短線。常見可回測的進場訊號範例:\n"
-            "        #   - 突破前 N 根高點 / 跌破前 N 根低點\n"
-            "        #   - 短均線上穿長均線(如 5 日上穿 20 日)\n"
-            "        #   - RSI 從超賣區回升\n"
-            "        # 請把『你實際在看的訊號』寫成明確、可量化的條件:\n"
-            "        signal = False  # TODO: 用你的進場規則取代\n"
+            "# 你的交易偏短線。常見可回測的進場訊號範例:\n"
+            "#   - 突破前 N 根高點 / 跌破前 N 根低點\n"
+            "#   - 短均線上穿長均線(如 5 日上穿 20 日)\n"
+            "#   - RSI 從超賣區回升\n"
+            "# 請把『你實際在看的訊號』寫成明確、可量化的條件:\n"
+            "signal = False  # TODO: 用你的進場規則取代"
         )
     if code in ("swing_medium", "position"):
         return (
-            "        # 你的交易偏中期波段。常見可回測的進場訊號範例:\n"
-            "        #   - 站上季線(60 日均線)且成交量放大\n"
-            "        #   - 回測支撐不破後的反彈\n"
-            "        signal = False  # TODO: 用你的進場規則取代\n"
+            "# 你的交易偏中期波段。常見可回測的進場訊號範例:\n"
+            "#   - 站上季線(60 日均線)且成交量放大\n"
+            "#   - 回測支撐不破後的反彈\n"
+            "signal = False  # TODO: 用你的進場規則取代"
         )
     return (
-        "        # 你的交易偏長期投資。對長期投資而言,『定期定額 + 分散』\n"
-        "        # 通常勝過擇時。若仍要擇時,請把規則明確量化:\n"
-        "        signal = False  # TODO: 用你的進場規則取代\n"
+        "# 你的交易偏長期投資。對長期投資而言,『定期定額 + 分散』\n"
+        "# 通常勝過擇時。若仍要擇時,請把規則明確量化:\n"
+        "signal = False  # TODO: 用你的進場規則取代"
     )
 
 
@@ -102,7 +110,8 @@ def generate_skeleton(
             style=profile.style,
             side=side_default,
             holding=round(profile.avg_holding_days, 1),
-            entry_hint=entry_hint,
+            # 插入點在 `if not self.position:` 區塊內(class → def → if)= 12 格
+            entry_hint=textwrap.indent(entry_hint, " " * 12),
             level=verdict.level.value,
         )
     elif framework == "vectorbt":
@@ -117,7 +126,8 @@ def generate_skeleton(
             banner=banner,
             guard=guard,
             style=profile.style,
-            entry_hint=entry_hint,
+            # 插入點在 should_enter() 函式本體 = 4 格
+            entry_hint=textwrap.indent(entry_hint, " " * 4),
         )
     return body
 

@@ -106,7 +106,8 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 裝好本體後，上面的 `python -m core.cli` 都可換成更短的 `anti-gambling-trader`。
 
-> Windows 終端機若中文 / emoji 顯示異常，指令前加 `PYTHONUTF8=1`。
+> Windows 終端機若中文 / emoji 顯示異常：PowerShell 先執行 `$env:PYTHONUTF8=1` 再跑指令；
+> macOS / Linux 則在指令前面加 `PYTHONUTF8=1`。
 
 ## 輸入格式
 
@@ -224,7 +225,7 @@ core/
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 8 個測試檔，134 個測試
+tests/                 # 9 個測試檔，158 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -246,6 +247,7 @@ python tests/test_engine.py
 python tests/test_debate_fixes.py
 python tests/test_trend.py
 python tests/test_expansion.py
+python tests/test_skill_round.py
 ```
 
 ## 作者

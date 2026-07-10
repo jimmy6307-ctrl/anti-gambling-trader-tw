@@ -236,7 +236,8 @@ A：Mac 改打 `python3`。Windows 的話，多半是裝 Python 時忘了勾
 「Add Python to PATH」，重裝一次並勾起來。
 
 **Q：中文變成亂碼？**
-A：在指令最前面加 `PYTHONUTF8=1`，例如
+A：Windows（PowerShell）先執行 `$env:PYTHONUTF8=1`，再照常跑指令；
+Mac / Linux 則在指令最前面加 `PYTHONUTF8=1`，例如
 `PYTHONUTF8=1 python -m core.cli demo`。
 
 **Q：它會告訴我「買什麼股票會漲」嗎？**
