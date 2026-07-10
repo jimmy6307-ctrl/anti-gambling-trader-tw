@@ -173,7 +173,7 @@ def render_text_report(
         L.append("│                                                                  │")
         if verdict.level == VerdictLevel.GAMBLING:
             L.append("│  根據統計分析,你目前的交易行為比較接近『賭博』而非投資。        │")
-            L.append("│  期望值為負代表:玩越久、賠越多,這是數學,不是運氣問題。        │")
+            L.append("│  樣本期望值為負:照這樣打下去,統計預期就是越虧越多。            │")
         elif verdict.level == VerdictLevel.LUCK_SUSPECTED:
             L.append("│  你帳面上賺錢,但統計上無法排除這只是運氣。                      │")
             L.append("│  別讓一時的好運,騙你以為自己找到了穩定獲利的方法。              │")

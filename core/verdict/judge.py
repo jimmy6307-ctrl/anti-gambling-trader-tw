@@ -109,7 +109,8 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
     if m.expectancy < 0:
         flags.append(RedFlag(
             "negative_expectancy", "high",
-            f"每筆交易的期望值為負({m.expectancy:.2f})。長期下去,數學上注定虧損。"
+            f"每筆交易的樣本期望值為負({m.expectancy:.2f})。"
+            "方法不變的話,長期繼續的統計預期就是虧損。"
         ))
 
     # 2. 獲利集中於少數暴賺:像中樂透,不是穩定優勢
@@ -252,7 +253,7 @@ def judge(
     elif m.expectancy < 0:
         level = VerdictLevel.GAMBLING
         discourage = True
-        headline = "⛔ 這是賭博:你的策略期望值為負,長期下去數學上注定虧損。"
+        headline = "⛔ 這是賭博:你的策略樣本期望值為負 —— 方法不變,長期繼續的統計預期就是虧損。"
         reasons.append(
             f"在 {m.total_trades} 筆(已達判定門檻)交易下,每筆平均損益為 "
             f"{m.expectancy:+.2f}(已含成本)。正期望值是任何可持續策略的最低門檻,"

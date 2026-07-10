@@ -157,25 +157,74 @@ def test_analyze_full_equity_zero_is_friendly_error():
     assert p.returncode == 1
     assert "Traceback" not in p.stderr, f"不該有 traceback:{p.stderr[-300:]}"
     assert "--equity" in p.stderr
+    assert "有限數" in p.stderr, "錯誤訊息應為中文且說明約束"
 
 
 def test_equity_without_full_warns():
     """--equity 沒搭 --full 時要提醒未生效,不能靜默忽略。"""
     p = _run_cli("analyze", "--example", "tw", "--equity", "500000")
     assert "未帶 --full" in p.stderr
+    # 只是警告,分析本身必須照常完成(tw 範例=勸退,exit 2 且有裁決輸出)
+    assert p.returncode == 2
+    assert "賭博" in p.stdout
 
 
 def test_format_fraction_never_rounds_open_interval_to_endpoints():
     """0.9996 不可顯示 100%、0.0004 不可顯示 0% —— 端點只留給真端點。"""
+    import re
     from core.montecarlo import format_fraction as ff
 
     assert ff(1.0) == "100%" and ff(0.0) == "0%"
     for frac in (0.9996, 0.9999, 0.99951):
-        assert "100" not in ff(frac), f"{frac} 顯示 {ff(frac)}"
+        out = ff(frac)
+        assert not re.match(r"^100(\.0+)?%$", out), f"{frac} 顯示 {out}"
     for frac in (0.0004, 0.0001, 0.00049):
         out = ff(frac)
-        assert out != "0.0%" and out != "0%", f"{frac} 顯示 {out}"
+        assert not re.match(r"^0(\.0+)?%$", out), f"{frac} 顯示 {out}"
     assert ff(0.37) == "37%"
+    # 複核輪抓到的邊界 bug:0.5%/99.5% 曾被字串攔截誤標成 <0.1%/>99.9%
+    assert ff(0.005) == "0.5%", f"0.005 顯示 {ff(0.005)}"
+    assert ff(0.995) == "99.5%", f"0.995 顯示 {ff(0.995)}"
+
+
+def test_drawdown_display_uses_endpoint_discipline():
+    """最大回撤欄也要守端點紀律:0.9996 的回撤不可顯示成 100%。"""
+    import dataclasses
+    from core.montecarlo import RuinScenario, render_scenario
+
+    s = RuinScenario(
+        n_future_trades=200, n_paths=5000, start_equity=100000.0,
+        ruin_threshold=50000.0, ruin_fraction=0.5, median_final_equity=100.0,
+        p05_final_equity=0.0, p95_final_equity=200.0,
+        median_max_drawdown=0.004, p95_max_drawdown=0.9996,
+        median_trade_at_ruin=None, losing_streak_10_prob=0.5,
+        warnings=[], start_equity_inferred=False,
+    )
+    line = next(x for x in render_scenario(s).splitlines() if "最大回撤" in x)
+    assert "100%" not in line, f"p95 回撤 0.9996 不可顯示 100%:{line}"
+    assert "0%," not in line.replace("<0.1%", ""), f"中位回撤 0.004 不可顯示 0%:{line}"
+
+
+def test_loader_accepts_zeroed_option():
+    """歸零的選擇權(出場價 0)是合法交易,守門不得誤殺。"""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "zeroed.csv"
+        p.write_text(
+            "symbol,side,entry_price,exit_price,quantity,fees\n"
+            "TXO18000C25A,long,50,0,1,0\n", encoding="utf-8")
+        from core.ingest.loader import load_trades
+        log = load_trades(str(p))
+        assert len(log.trades) == 1, "出場價 0 的歸零商品應可載入"
+        assert log.trades[0].pnl < 0
+
+
+def test_gambling_wording_is_probabilistic():
+    """裁決措辭不可用「注定/必然」的決定論語氣(樣本≠母體)。"""
+    p = _run_cli("analyze", "--example", "tw")
+    assert "注定" not in p.stdout, "gambling 裁決不可說「注定」"
+    assert "玩越久、賠越多,這是數學" not in p.stdout
 
 
 def test_full_html_discloses_skipped_scenario():

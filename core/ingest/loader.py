@@ -409,6 +409,12 @@ def load_trades(
     warn = ""
     if skip_ratio > 0.2:
         warn = f", ⚠️略過比例 {skip_ratio:.0%} 偏高(可能欄位對應有誤)"
+    # 有列被略過就要說「為什麼」—— 只給筆數不給原因,使用者無從修資料。
+    # source 是報告開頭就會看到的字串,揭露前 2 筆原因 + 導引。
+    if skipped and skip_reasons:
+        preview = ";".join(skip_reasons[:2])
+        more = f"(其餘 {skipped - 2} 列原因略)" if skipped > 2 else ""
+        warn += f", 略過原因:{preview}{more}"
     lot_note = ", 數量以『張』×1000 換算為股" if qty_in_lots else ""
     if unknown_multiplier_symbols:
         syms = ", ".join(sorted(unknown_multiplier_symbols)[:3])

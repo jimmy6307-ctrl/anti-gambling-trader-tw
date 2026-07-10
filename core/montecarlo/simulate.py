@@ -115,11 +115,12 @@ def simulate_ruin_scenario(
     ):
         raise ValueError(f"start_equity 必須是 > 0 的有限數,收到 {start_equity}")
 
+    # 資料污染先於樣本不足檢查:含 NaN/inf 時回「樣本不足」會掩蓋真正的問題
+    if any(not math.isfinite(p) for p in pnls):
+        raise ValueError("損益序列含 NaN/inf,無法模擬 —— 請先清理資料")
     n = len(pnls)
     if n < 10:
         return None
-    if any(not math.isfinite(p) for p in pnls):
-        raise ValueError("損益序列含 NaN/inf,無法模擬 —— 請先清理資料")
 
     equity_inferred = start_equity is None
     if start_equity is None:
@@ -219,7 +220,10 @@ def format_fraction(frac: float) -> str:
         return "100%"
     if frac <= 0.0:
         return "0%"
-    text = f"{frac:.0%}" if 0.005 <= frac <= 0.995 else f"{frac:.1%}"
+    # 整數百分比只用在 [1%, 99%] —— 這個區間的 :.0% 不可能捨入出 0%/100%,
+    # 端點攔截因此只會命中真正貼近端點的值(複核輪抓到的教訓:
+    # 0.005 若走 :.0% 會變 0% 再被誤標成 <0.1%,但真值是 0.5%)。
+    text = f"{frac:.0%}" if 0.01 <= frac <= 0.99 else f"{frac:.1%}"
     if text in ("100%", "100.0%"):
         return ">99.9%"
     if text in ("0%", "0.0%"):
@@ -261,8 +265,8 @@ def render_scenario(s: RuinScenario) -> str:
              f"(5%~95% 區間 {s.p05_final_equity:,.0f} ~ {s.p95_final_equity:,.0f})")
     L.append("            (爆掉的路徑在爆倉當下就停止 —— 現實中你會被強制平倉,")
     L.append("             不會用負的資金繼續交易)")
-    L.append(f"  最大回撤    : 中位數 {s.median_max_drawdown:.0%},"
-             f"最壞 5% 的情境達 {s.p95_max_drawdown:.0%}")
+    L.append(f"  最大回撤    : 中位數 {format_fraction(s.median_max_drawdown)},"
+             f"最壞 5% 的情境達 {format_fraction(s.p95_max_drawdown)}")
     L.append(f"  連虧 10 次  : 在未來 {s.n_future_trades} 筆裡出現的機率 "
              f"{format_fraction(s.losing_streak_10_prob)}")
     L.append("            (以你目前的勝率計算。連虧不是「會不會」,是「什麼時候」——")

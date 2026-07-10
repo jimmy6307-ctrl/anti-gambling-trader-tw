@@ -186,7 +186,7 @@ def render_html_report(
             f"<tr><td>起始權益</td><td class='num'>{scenario.start_equity:,.0f} {h(inferred)}</td></tr>"
             f"<tr><td>爆倉路徑比例</td><td class='num'>{h(_ff(scenario.ruin_fraction))}</td></tr>"
             f"<tr><td>最大回撤(中位數 / 最壞 5%)</td>"
-            f"<td class='num'>{scenario.median_max_drawdown:.0%} / {scenario.p95_max_drawdown:.0%}</td></tr>"
+            f"<td class='num'>{h(_ff(scenario.median_max_drawdown))} / {h(_ff(scenario.p95_max_drawdown))}</td></tr>"
             f"<tr><td>連虧 10 次的機率</td><td class='num'>{h(_ff(scenario.losing_streak_10_prob))}</td></tr>"
             f"</tbody></table>"
             f'<div class="alert"><b>這是「情境」不是「預測」:</b><ul>{warn_items}</ul></div>'
