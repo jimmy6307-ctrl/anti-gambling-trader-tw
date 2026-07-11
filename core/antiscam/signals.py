@@ -12,9 +12,14 @@ from ..strategy.profiler import StrategyProfile
 from .patterns import find_pattern
 
 # 暗示「跟單 / 聽明牌」的 tag 關鍵字
+# 注意:不收裸「群」—— 子字串比對會把「族群輪動」「產業群」等正常策略
+# 標籤誤判成跟單,進而輸出「假飆股群受害者」的嚴重指控(真實誤殺案例)。
+# 「群」必須帶詐騙語境的詞組才算。
 _FOLLOW_KEYWORDS = (
-    "老師", "明牌", "報明牌", "帶單", "群", "vip", "內線", "消息", "推薦",
+    "老師", "明牌", "報明牌", "帶單", "vip", "內線", "消息", "推薦",
     "跟單", "名師", "分析師", "飆股",
+    "投資群", "股票群", "老師群", "line群", "飆股群", "帶單群", "群組",
+    "二群", "vip群",
 )
 
 
@@ -32,14 +37,19 @@ def scam_warnings_for(
     ]
     if follow_tags and metrics.expectancy < 0:
         p = find_pattern("fake_stock_group")
+        # 措辭紀律:這裡只知道「有跟單標籤」且「整體」EV 為負,
+        # 不知道虧損是否來自跟單那幾筆 —— 不可宣稱「你的虧損交易中」。
+        # 跟單本身賺賠由報告的【跟單/聽明牌成績單】(follow_the_guru)實算。
         warnings.append(
-            f"🚨 你的虧損交易中,有標籤像是『跟單 / 聽明牌』({', '.join(follow_tags[:3])}),"
-            f"而整體期望值為負。這是『假飆股群 / 假老師』受害者的典型軌跡 —— "
+            f"🚨 你的紀錄出現疑似『跟單 / 聽明牌』的標籤({', '.join(follow_tags[:3])}),"
+            f"且整體期望值為負。這與『假飆股群 / 假老師』受害者的典型軌跡相符 —— "
+            f"跟單部分實際賺賠見報告的【跟單 / 聽明牌的成績單】。"
             f"{p.rebuttal if p else ''}"
         )
 
     # 2. 高勝率 + 負期望 → 正中「高勝率話術」的陷阱
-    if metrics.win_rate > 0.6 and metrics.expectancy < 0:
+    # 小樣本閘門:少於 10 筆時勝率本身沒有意義,不做這種定錨敘事
+    if metrics.total_trades >= 10 and metrics.win_rate > 0.6 and metrics.expectancy < 0:
         p = find_pattern("guaranteed_return")
         warnings.append(
             f"⚠️ 你的勝率有 {metrics.win_rate:.0%},帳面上『常常贏』,但期望值卻是負的"

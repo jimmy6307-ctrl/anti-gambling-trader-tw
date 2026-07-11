@@ -103,12 +103,12 @@ def analyze_log(
     metrics = compute_metrics(log)
     verdict = judge(log, metrics=metrics, n_bootstrap=n_bootstrap)
     profile = profile_strategy(log)
-    oos = holdout_validate(log)
+    oos = holdout_validate(log, n_bootstrap=n_bootstrap)
 
     # 逐策略裁決 + 反事實 + 跟單抽算(實用性核心)
     tag_verdicts = per_tag_verdicts(log)
     counterfactual = counterfactual_drop_worst(log, tag_verdicts=tag_verdicts)
-    guru = follow_the_guru(log)
+    guru = follow_the_guru(log, n_bootstrap=n_bootstrap)
 
     text = render_text_report(
         log, metrics, verdict, profile, oos,

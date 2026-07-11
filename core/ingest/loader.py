@@ -357,6 +357,21 @@ def load_trades(
                 )
             continue
 
+        # 台期/選擇權且乘數未知:pnl 沒直接給的話,用乘數 1.0 推算會少算
+        # 數十到數千倍 —— 那不是「估計」,是錯的數字。誠實略過並要求 pnl。
+        if (
+            pnl is None
+            and market in (Market.TW_FUTURES, Market.TW_OPTIONS)
+            and not mult_known
+        ):
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):契約乘數未知,"
+                    "期貨/選擇權損益無法可信推算 —— 請直接提供 pnl 欄位"
+                )
+            continue
+
         entry_price = entry_price_raw or 0.0
         exit_price = exit_price_raw or 0.0
         quantity = (quantity_raw or 0.0) * lot_multiplier
@@ -382,20 +397,27 @@ def load_trades(
                 )
         fees = fees or 0.0
 
-        trade = Trade(
-            symbol=symbol,
-            market=market,
-            side=side,
-            entry_time=entry_time,
-            exit_time=exit_time,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            quantity=quantity,
-            fees=fees,
-            pnl=pnl,  # 若為 None,Trade.__post_init__ 會用價格推算(已含 fees)
-            tag=tag,
-            contract_multiplier=mult,
-        )
+        try:
+            trade = Trade(
+                symbol=symbol,
+                market=market,
+                side=side,
+                entry_time=entry_time,
+                exit_time=exit_time,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=quantity,
+                fees=fees,
+                pnl=pnl,  # 若為 None,Trade.__post_init__ 會用價格推算(已含 fees)
+                tag=tag,
+                contract_multiplier=mult,
+            )
+        except ValueError as exc:
+            # Trade 的不變量驗證(如出場早於進場)→ 記錄原因後略過該列
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(f"第 {row_no} 列:{exc}")
+            continue
         trades.append(trade)
 
     if not trades:

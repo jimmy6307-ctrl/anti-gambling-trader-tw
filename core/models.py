@@ -72,6 +72,13 @@ class Trade:
     contract_multiplier: float = 1.0
 
     def __post_init__(self) -> None:
+        # 不變量:出場不可早於進場。這種列是髒資料(或欄位對錯),
+        # 靜默收下會產生負持倉天數、被 profiler 誤分類成短線 —— 直接拒絕。
+        if self.exit_time < self.entry_time:
+            raise ValueError(
+                f"{self.symbol}: 出場時間({self.exit_time:%Y-%m-%d %H:%M})早於"
+                f"進場時間({self.entry_time:%Y-%m-%d %H:%M}),資料有誤"
+            )
         # 若使用者沒提供 pnl,就用價格推算。做多與做空的方向相反。
         # 契約乘數必須納入 —— 否則台指期(乘數 200)的損益會少算 200 倍。
         if self.pnl is None:

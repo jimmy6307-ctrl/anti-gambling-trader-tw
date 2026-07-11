@@ -24,7 +24,7 @@ class ScaffoldOptions:
     """產生個人交易程式專案的選項。"""
 
     project_name: str = "my_trading_bot"
-    broker: str = "paper"               # paper | binance | ibkr | alpaca | shioaji
+    broker: str = "paper"               # 完整清單見 anti-gambling-trader brokers
     chart: str = "lightweight"          # lightweight | plotly | mplfinance | echarts
     market: str = "us_stock"            # tw_stock | us_stock | crypto
     symbols: list[str] = field(default_factory=lambda: ["AAPL"])

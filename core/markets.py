@@ -84,7 +84,16 @@ ISO_CCY = frozenset({
 
 # 加密貨幣的計價幣(用於區分 BTCUSDT 這種代號)
 _CRYPTO_QUOTE = re.compile(r"(USDT|USDC|BUSD|DAI)$", re.IGNORECASE)
-_CRYPTO_BASE = re.compile(r"^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB)", re.IGNORECASE)
+# 主流幣「基底」只有在後面接分隔符或明確計價幣時才算加密貨幣 ——
+# 裸前綴比對是真實 bug:SOL(NYSE 真實代號)、ETHA(iShares 以太幣 ETF)、
+# SOLAR 等美股會被劫持成 crypto,套用完全錯誤的成本模型。
+_CRYPTO_BASE = re.compile(
+    r"^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB)(?=[-/_]|(USD|EUR|JPY|GBP|TWD|KRW)$)",
+    re.IGNORECASE,
+)
+# 裸幣名(無計價幣)與證券代號空間衝突(SOL/ADA 都可能是美股代號),
+# 模稜兩可 → UNKNOWN,要用 market_hint 明確指定。寧可不判,不可錯判。
+_BARE_COINS = frozenset({"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB"})
 
 _FOREX_PAIR = re.compile(r"^([A-Z]{3})([A-Z]{3})$")
 _TW_ETF = re.compile(r"^00\d{2,4}[A-Z]?$")      # 0050, 0056, 00878...
@@ -136,9 +145,13 @@ def infer_market(symbol: str, hint: Market | None = None) -> Market:
     if m and m.group(1) in ISO_CCY and m.group(2) in ISO_CCY:
         return Market.FOREX
 
-    # 3. 加密貨幣:明確的計價幣後綴,或已知的主流幣前綴
+    # 3. 加密貨幣:明確的計價幣後綴,或「主流幣基底 + 分隔符/計價幣」
     if _CRYPTO_QUOTE.search(s) or _CRYPTO_BASE.match(s):
         return Market.CRYPTO
+
+    # 3.5 裸幣名(BTC、SOL…):與美股代號空間衝突,誠實回 UNKNOWN
+    if s in _BARE_COINS:
+        return Market.UNKNOWN
 
     # 4. 台股 ETF(00 開頭)→ 5. 台股 → 6. 美股
     if _TW_ETF.match(s):

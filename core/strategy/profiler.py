@@ -62,9 +62,12 @@ def profile_strategy(log: TradeLog) -> StrategyProfile:
             symbol_concentration=0, distinct_symbols=0,
         )
 
+    import statistics
+
     holding = sorted(t.holding_days for t in trades)
     avg_days = sum(holding) / n
-    median_days = holding[n // 2]
+    # 偶數筆要取中央兩值的平均:持倉 1 天與 9 天的中位數是 5 天,不是 9 天
+    median_days = float(statistics.median(holding))
     # 當沖判定統一用 Trade.is_day_trade(同一交易日),與成本估算口徑一致
     intraday_ratio = sum(1 for t in trades if t.is_day_trade) / n
 

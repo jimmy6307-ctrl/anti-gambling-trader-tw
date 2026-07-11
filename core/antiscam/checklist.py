@@ -62,7 +62,7 @@ class ScamCheckResult:
     advice: list[str] = field(default_factory=list)
 
     @property
-    def risk_pct(self) -> float:
+    def weighted_ratio(self) -> float:
         """僅供內部門檻判斷用,**不可對使用者呈現為百分比**。
 
         這個比例是「命中權重 / 總權重」,權重是我們自己訂的,
@@ -127,8 +127,8 @@ def evaluate(answers: dict[str, bool]) -> ScamCheckResult:
     )
 
 
-def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult:
-    """互動式跑一遍檢測清單。回傳結果。
+def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult | None:
+    """互動式跑一遍檢測清單。回傳結果;輸入中斷時回傳 None(不給半套結論)。
 
     input_fn / output_fn 可注入,方便測試;預設用標準輸入輸出。
     """
@@ -137,10 +137,28 @@ def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult:
     output_fn("=" * 60)
     output_fn("請依你目前遇到的情況,回答以下問題(y = 是 / n = 否):\n")
 
+    yes_tokens = ("y", "yes", "是", "1", "有")
+    no_tokens = ("n", "no", "否", "0", "沒有", "無")
     answers: dict[str, bool] = {}
     for i, it in enumerate(CHECK_ITEMS, 1):
-        raw = str(input_fn(f"  {i}. {it.question} [y/n] ")).strip().lower()
-        answers[it.key] = raw in ("y", "yes", "是", "1", "有")
+        # 輸入驗證迴圈:看不懂的輸入**不可**靜默當成「否」——
+        # 按錯鍵就降低風險評估,對反詐工具是最危險的失敗模式。
+        while True:
+            try:
+                raw = str(input_fn(f"  {i}. {it.question} [y/n] ")).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                output_fn(
+                    "\n⚠️ 輸入中斷:問卷未完成,不給任何風險結論 —— "
+                    "半份問卷算出的『低風險』是假保證。請重新執行 scam-check。"
+                )
+                return None
+            if raw in yes_tokens:
+                answers[it.key] = True
+                break
+            if raw in no_tokens:
+                answers[it.key] = False
+                break
+            output_fn("     ↳ 請輸入 y(是)或 n(否)。看不懂的輸入不會被當成『否』。")
 
     result = evaluate(answers)
 
@@ -149,8 +167,15 @@ def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult:
     # 只呈現「命中幾項 / 共幾項」的事實與序數等級。
     # 不印百分比 —— 那個數字沒有經過校準,不對應任何真實機率(假精準)。
     n_hit = sum(1 for it in CHECK_ITEMS if answers.get(it.key))
+    n_hard = sum(
+        1 for it in CHECK_ITEMS if answers.get(it.key) and it.weight >= 3
+    )
     output_fn(f"  命中 {n_hit} / {len(CHECK_ITEMS)} 項詐騙特徵"
-              f"  風險等級:{result.risk_level}")
+              f"(其中鐵證級 {n_hard} 項)  風險等級:{result.risk_level}")
+    # 可解釋性:等級是「特徵嚴重度加權」的結果,不是純命中數 ——
+    # 否則使用者會困惑「同樣中 3 項,為什麼他是中、我是極高」。
+    output_fn("  (風險等級依特徵嚴重度加權判定,非單純命中數;"
+              "任一鐵證級特徵命中即列為極高。)")
     output_fn(f"  {result.headline}")
     output_fn("=" * 60)
     if result.advice:

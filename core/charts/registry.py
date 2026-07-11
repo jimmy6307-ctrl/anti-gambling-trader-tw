@@ -38,14 +38,14 @@ _LIGHTWEIGHT = ChartLib(
     kind="web",
     install='前端透過 CDN 載入,Python 端只負責輸出 chart_data.json',
     blurb="最接近專業看盤軟體的 K 線體驗,輕量、流暢。",
-    module_code='''"""Lightweight Charts 繪圖模組:輸出資料 + 自包含 HTML。"""
+    module_code='''"""Lightweight Charts 繪圖模組:輸出單一 HTML 檔(圖表庫由 CDN 載入,需網路)。"""
 
 import json
 from pathlib import Path
 
 
 def render(candles, markers, equity, out_html="chart.html", title="我的交易策略"):
-    """產生一個自包含的 HTML 圖表(K 線 + 進出場標記 + 權益曲線)。"""
+    """產生單一 HTML 圖表檔(K 線 + 進出場標記 + 權益曲線;JS 庫走 CDN,離線不渲染)。"""
     lw_markers = [
         {
             "time": m["time"],
@@ -213,7 +213,7 @@ _ECHARTS = ChartLib(
     kind="web",
     install="前端透過 CDN 載入,Python 端只負責輸出 chart_data.json",
     blurb="功能全面、中文生態完整,適合做豐富的儀表板。",
-    module_code='''"""ECharts 繪圖模組:輸出自包含 HTML(K 線 + 標記 + 權益)。"""
+    module_code='''"""ECharts 繪圖模組:輸出單一 HTML 檔(K 線 + 標記 + 權益;ECharts 由 CDN 載入,需網路)。"""
 
 import json
 from pathlib import Path

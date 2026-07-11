@@ -99,6 +99,12 @@ python -m core.cli scaffold --name {opts.project_name} --broker {opts.broker} \\
 """
 
 
+def _broker_keys_comment() -> str:
+    """動態產生券商清單註解 —— 硬編碼清單已經漂移過一次(缺 kgi 等)。"""
+    from ..broker import BROKER_TEMPLATES
+    return " | ".join(["paper"] + sorted(BROKER_TEMPLATES.keys()))
+
+
 def config_yaml(opts, discouraged: bool, verdict_level: str) -> str:
     return f"""# {opts.project_name} 設定檔範本
 # 複製成 config.yaml 後填入你的實際值。config.yaml 已被 .gitignore 排除。
@@ -107,7 +113,7 @@ market: {opts.market}
 symbols:
 {chr(10).join(f'  - {_json.dumps(s, ensure_ascii=False)}' for s in opts.symbols)}
 
-broker: {opts.broker}        # paper | binance | ibkr | alpaca | shioaji
+broker: {opts.broker}        # 可選:{_broker_keys_comment()}
 
 # 真實券商金鑰（紙上模擬不需要）。請勿提交到 git。
 credentials:
@@ -226,7 +232,10 @@ def broker_setup_py(opts, broker_tmpl) -> str:
         body = f'''    # 預設仍回傳紙上模擬;要接真實券商,取消下面註解並填入你的金鑰。
     if config.get("broker") == "{broker_tmpl.key}":
         # creds = config.get("credentials", {{}})
-        # broker = {cls}(creds["api_key"], creds["api_secret"])  # 視券商調整參數
+        # ⚠️ 建構子參數依券商而異(如 IBKR 是 host/port/client_id,不是金鑰)——
+        #    先打開 brokers/{broker_tmpl.key}_broker.py 看 {cls}.__init__ 的簽名,
+        #    再把對應欄位加進 config.yaml 的 credentials 區塊。
+        # broker = {cls}(...)  # ← 依上面確認的簽名填參數
         # return broker
         pass
     return PaperBroker(
@@ -414,12 +423,17 @@ def run():
                     all_markers.append({{"time": bar["time"], "price": bar["high"],
                                          "side": "sell", "text": sig.reason or "賣"}})
 
-            equity_curve.append({{"time": bar["time"],
-                                  "value": broker.get_account().equity}})
+            # 權益只在圖表主標的那一輪取樣:多標的時每輪 K 棒時間軸會重疊,
+            # 全部 append 會讓權益曲線時間回捲、第一檔的歷史被覆蓋(圖會畫錯)
+            if symbol == chart_symbol:
+                equity_curve.append({{"time": bar["time"],
+                                      "value": broker.get_account().equity}})
 
     acct = broker.get_account()
     print("=" * 50)
-    print(f"  策略執行完畢（{{config.get('broker')}} 模式）")
+    # 用實際 broker 實例的名稱:config 寫 shioaji 但 adapter 還沒解註解時,
+    # 實際跑的是 PaperBroker —— 印 config 值會誤導使用者以為單已送到券商
+    print(f"  策略執行完畢（{{getattr(broker, 'name', '?')}} 模式）")
     print(f"  最終權益: {{acct.equity:,.2f}}")
     print(f"  成交筆數: {{n_fills}}")
     print("=" * 50)

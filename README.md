@@ -142,7 +142,7 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 1. **期望值**：每筆平均賺/賠多少。**負期望 = 賭博，沒有例外。**
 2. **顯著性檢定**：t 檢定 + Bootstrap 重抽，雙雙 p < 0.05 才算「不是運氣」。偏保守。
-3. **樣本外驗證**：交易依時間切兩半，前半的優勢在後半若消失 → 過度配適 / 倖存者偏差。
+3. **樣本外驗證**：交易依時間單一切點切成前段（約 70%，樣本內）與後段（約 30%，樣本外），前段的優勢在後段若消失 → 過度配適 / 倖存者偏差。
 4. **賭博特徵掃描**：負期望、單筆暴賺撐場、賺小賠大、極端回撤、長連虧、純當沖…
 
 ## 建立你自己的交易程式
@@ -220,12 +220,12 @@ core/
   survivorship.py      # 倖存者偏差模擬器（精確 DP，非模擬近似）
   forensics/           # 假績效統計鑑識（runs test / Lo 校正夏普 / 尾數卡方）
   antiscam/            # 反詐核心：特徵庫 + scam-check + 話術偵測 + 假老師驗證器
-  broker/              # 券商抽象層 + PaperBroker + 13 種券商範本
+  broker/              # 券商抽象層 + PaperBroker + 12 種券商範本（共 13 種券商選項）
   charts/              # 四種開源圖表庫範本 + 樣式預覽
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 9 個測試檔，168 個測試
+tests/                 # 10 個測試檔，177 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -248,6 +248,7 @@ python tests/test_debate_fixes.py
 python tests/test_trend.py
 python tests/test_expansion.py
 python tests/test_skill_round.py
+python tests/test_round7.py
 ```
 
 ## 作者

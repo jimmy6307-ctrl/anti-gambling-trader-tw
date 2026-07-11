@@ -6,6 +6,7 @@ from .antiscam.signals import scam_warnings_for
 from .backtest.validate import OutOfSampleReport
 from .metrics.breakeven import compute_break_even
 from .metrics.performance import PerformanceMetrics
+from .markets import uncovered_cost_warnings
 from .models import TradeLog
 from .strategy.profiler import StrategyProfile
 from .verdict.judge import Verdict, VerdictLevel
@@ -152,6 +153,19 @@ def render_text_report(
             L.append("")
 
     # ── 建議 ──
+    # 未涵蓋成本 / 模型限制:markets.py 定義的警語必須真的到使用者眼前,
+    # 不能只寫在程式碼註解裡(外匯 swap、永續資金費率、選擇權左尾)。
+    cost_notes: list[str] = []
+    for _mkt in sorted({t.market for t in log.trades}, key=lambda m: m.value):
+        for _w in uncovered_cost_warnings(_mkt):
+            if _w not in cost_notes:
+                cost_notes.append(_w)
+    if cost_notes:
+        L.append("【⚠ 本工具未涵蓋的成本 / 模型限制 — 誠實聲明】")
+        for _w in cost_notes:
+            L.append(f"  • {_w}")
+        L.append("")
+
     L.append("【給你的建議】")
     for a in verdict.advice:
         L.append(f"  • {a}")

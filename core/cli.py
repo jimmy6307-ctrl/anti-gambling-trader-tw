@@ -572,6 +572,8 @@ def main(argv: list[str] | None = None) -> int:
         from .antiscam import run_scam_check
 
         result = run_scam_check()
+        if result is None:
+            return 1  # 問卷被中斷:沒有結論,以錯誤碼收場
         # 高風險時回傳非 0,方便腳本判斷
         return 2 if result.risk_level in ("極高", "高") else 0
 
@@ -801,8 +803,14 @@ def _cmd_scaffold(args) -> int:
     if inferred_symbols and args.symbols == "AAPL":
         symbols = inferred_symbols   # 使用者沒自訂 symbols 時,用分析來的
 
-    # market 推斷優先序:--market 指定 > --from-analysis 繼承 > 從標的代號推斷
-    market = args.market or inferred_market
+    # market 推斷優先序:--market 指定 > --from-analysis 繼承 > 從標的代號推斷。
+    # 但使用者「明確自訂了 --symbols」時,繼承會與標的矛盾
+    # (分析檔是台股、標的卻是 AAPL,產出 market: tw_stock 配美股)——
+    # 此時改依標的推斷,繼承只在 symbols 也來自分析檔時使用。
+    user_set_symbols = args.symbols != "AAPL"
+    market = args.market
+    if market is None and inferred_market and not user_set_symbols:
+        market = inferred_market
     if market is None and symbols:
         market = infer_market(symbols[0]).value
         if market != "unknown":
