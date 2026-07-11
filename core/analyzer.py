@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +25,22 @@ from .strategy.per_tag import (
 from .strategy.profiler import StrategyProfile, profile_strategy
 from .strategy.skeleton import generate_skeleton
 from .verdict.judge import Verdict, judge
+
+
+def sanitize_json(obj):
+    """遞迴把 inf/-inf/NaN 轉成 None。
+
+    json.dumps 對非有限 float 會輸出非標準的 Infinity/NaN 字面值,
+    嚴格解析器直接炸。inf 的語意是「不適用」(如全勝樣本的獲利因子),
+    序列化成 null 才誠實。所有對外 JSON 都必須過這一層。
+    """
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_json(x) for x in obj]
+    return obj
 
 
 @dataclass
@@ -49,7 +66,9 @@ class AnalysisResult:
         from .metrics.breakeven import compute_break_even
 
         be = compute_break_even(self.metrics)
-        return {
+        # 整包過 sanitize_json:inf 不只出現在 metrics(OOS 全勝區段、
+        # per-tag 的 profit_factor 同樣會是 inf),單點防護會漏
+        return sanitize_json({
             "source": self.log.source,
             "markets": sorted(m.value for m in self.log.markets),
             "verdict": self.verdict.as_dict(),
@@ -90,7 +109,7 @@ class AnalysisResult:
                 "required_payoff_ratio": be.required_payoff_ratio,
                 "fee_cut_to_breakeven": be.fee_cut_to_breakeven,
             },
-        }
+        })
 
 
 def analyze_log(

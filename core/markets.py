@@ -190,9 +190,9 @@ def uncovered_cost_warnings(market: Market) -> list[str]:
         )
     if market == Market.TW_ETF:
         out.append(
-            "債券 ETF 至 2026-12-31 暫停課徵證交稅,但本工具無法從代號辨識"
-            "股票型/債券型,一律用股票型 0.1% 保守估算 —— 若你交易的是債券 ETF,"
-            "賣出稅被高估,請在 fees 欄位填實際費用。"
+            "一般債券 ETF(不含槓桿型/反向型)至 2026-12-31 暫停課徵證交稅,"
+            "但本工具無法從代號辨識 ETF 型別,一律用股票型 0.1% 保守估算 —— "
+            "若你交易的是適用免稅的債券 ETF,賣出稅被高估,請在 fees 欄位填實際費用。"
         )
     if market in (Market.TW_FUTURES, Market.TW_OPTIONS):
         out.append(

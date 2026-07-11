@@ -197,6 +197,10 @@ def _rows_from_csv(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
                 reader = csv.DictReader(f, delimiter=delimiter)
                 rows = list(reader)
                 columns = reader.fieldnames or []
+            # 記下實際使用的編碼:cp950 回退「有可能」把損壞的 UTF-8 讀成
+            # 貌似合法的中文而不報錯 —— 編碼判定結果必須到報告開頭,
+            # 使用者看到亂碼時才有線索,而不是工具靜默宣稱辨識成功。
+            _rows_from_csv.last_encoding = enc
             return list(columns), rows
         except UnicodeDecodeError:
             continue
@@ -264,8 +268,10 @@ def load_trades(
     path = Path(path)
     fmt = sniff_format(path)
 
+    used_encoding = "utf-8"
     if fmt == "csv":
         columns, rows = _rows_from_csv(path)
+        used_encoding = getattr(_rows_from_csv, "last_encoding", "utf-8-sig")
     elif fmt == "json":
         columns, rows = _rows_from_json(path)
     else:
@@ -458,6 +464,11 @@ def load_trades(
 
     return TradeLog(
         trades=trades,
-        source=f"{path.name} ({fmt}, 載入 {len(trades)} 筆, 略過 {skipped} 筆{warn}{lot_note})",
+        source=(
+            f"{path.name} ({fmt}"
+            + (", 以 Big5/cp950 編碼讀取 — 若見亂碼請改存 CSV UTF-8"
+               if used_encoding == "cp950" else "")
+            + f", 載入 {len(trades)} 筆, 略過 {skipped} 筆{warn}{lot_note})"
+        ),
         account_label=path.stem,
     )

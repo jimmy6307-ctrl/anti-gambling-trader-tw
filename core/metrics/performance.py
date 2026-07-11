@@ -171,23 +171,23 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     # 這讓回撤百分比落在「相對於帳戶規模」的合理區間。
     # 用 contract_value(= 價格 × 數量 × 契約乘數):期貨若漏乘乘數,
     # 資本基準會小 200 倍,回撤百分比整個失真。股票乘數為 1,結果不變。
-    position_sizes = [t.contract_value for t in trades]
-    capital_base = max(position_sizes, default=0.0)
-
-    # 回撤百分比必須用「當下」的高水位算,不可事後用最終峰值回算 ——
-    # 後者是前視偏差:回撤發生後的獲利會回頭稀釋早期回撤
-    # (先虧 90% 再暴賺,最終峰值會把 90% 稀釋成個位數,嚴重低估風險)。
+    # 回撤百分比必須全程「因果」:分母與峰值都只能用「當下已知」的資訊。
+    #  - 峰值用當下高水位(不可用最終峰值回算 —— 事後獲利會稀釋早期回撤)
+    #  - 資本基準用「至今出現過的最大部位」逐筆更新(不可用整段紀錄的
+    #    最大部位 —— 未來才放大的部位會把早期 90% 回撤稀釋成 0.009%)
     equity = 0.0
     peak = 0.0
     max_dd = 0.0
     max_dd_pct = 0.0
-    for p in pnls:
+    running_capital = 0.0
+    for t, p in zip(trades, pnls):
+        running_capital = max(running_capital, t.contract_value)
         equity += p
         peak = max(peak, equity)
         dd = peak - equity
         if dd > max_dd:
             max_dd = dd
-        denom_now = capital_base + peak  # 當下帳戶能動用的高水位
+        denom_now = running_capital + peak  # 當下帳戶能動用的高水位
         if denom_now > 0:
             dd_pct = dd / denom_now
             if dd_pct > max_dd_pct:
@@ -196,7 +196,7 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     m.max_drawdown_pct = max_dd_pct
     # pnl-only 資料(無進場價/數量)沒有資本基準:金額算得出、百分比算不出。
     # 標記不可靠,顯示層要說「無法計算」而不是印一個假的 0%。
-    m.drawdown_pct_reliable = capital_base > 0
+    m.drawdown_pct_reliable = running_capital > 0
 
     # ── 最長連續虧損 ──
     streak = 0

@@ -63,9 +63,10 @@ class CostModel:
         )
         charge_tax = is_sell or self.tax_both_sides
         tax = value * self.tax_rate if charge_tax else 0.0
-        # 賣出端按股數的規費(FINRA TAF):每股 × 股數,有每筆上限
+        # 賣出端按股數的規費(FINRA TAF):每股 × 股數,有每筆上限。
+        # 低價例外:成交價低於每股費率時 FINRA 不收 TAF。
         per_share = 0.0
-        if is_sell and self.sell_per_share_fee > 0:
+        if is_sell and self.sell_per_share_fee > 0 and price >= self.sell_per_share_fee:
             per_share = self.sell_per_share_fee * abs(quantity)
             if self.sell_per_share_fee_cap > 0:
                 per_share = min(per_share, self.sell_per_share_fee_cap)
@@ -176,14 +177,10 @@ def estimate_round_trip_cost(
 
     # 台股當沖:證交稅減半。複製一份模型,只調整稅率,不動其他參數。
     if is_day_trade and market == Market.TW_STOCK and m.tax_rate > TW_DAY_TRADE_TAX_RATE:
-        m = CostModel(
-            commission_rate=m.commission_rate,
-            commission_min=m.commission_min,
-            tax_rate=TW_DAY_TRADE_TAX_RATE,
-            slippage_rate=m.slippage_rate,
-            commission_per_unit=m.commission_per_unit,
-            tax_both_sides=m.tax_both_sides,
-        )
+        # 用 dataclasses.replace 只改稅率:手寫欄位複製在新增欄位時會
+        # 靜默清零(sell_per_share_fee 就曾被這樣吃掉)
+        import dataclasses
+        m = dataclasses.replace(m, tax_rate=TW_DAY_TRADE_TAX_RATE)
 
     mult = contract_multiplier
     if side == Side.LONG:

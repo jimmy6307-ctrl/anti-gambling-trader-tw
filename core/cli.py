@@ -14,7 +14,7 @@ import math
 import sys
 from pathlib import Path
 
-from .analyzer import analyze_file
+from .analyzer import analyze_file, sanitize_json
 from .models import Market
 
 
@@ -493,7 +493,10 @@ def main(argv: list[str] | None = None) -> int:
                     "risk_scenario_skipped_reason": skip_reason,
                 }
             Path(args.json).write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
+                # sanitize:full_extras 等巢狀結構的 inf/NaN 也要轉 null;
+                # allow_nan=False 當最後防線 —— 再漏就直接炸,不輸出壞 JSON
+                json.dumps(sanitize_json(payload), ensure_ascii=False,
+                           indent=2, allow_nan=False),
                 encoding="utf-8",
             )
             print(f"\n[已輸出 JSON 結果] {args.json}")

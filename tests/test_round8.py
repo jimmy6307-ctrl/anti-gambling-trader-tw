@@ -143,6 +143,101 @@ def test_required_sample_size_handles_inf_payoff():
     assert isinstance(n, int) and n > 0
 
 
+# ── 第 8 輪複核(兩模型驗收)確認問題的回歸 ─────────────────────────
+
+
+def test_drawdown_capital_base_is_causal():
+    """未來才放大的部位不得稀釋早期回撤(複核抓到的第二層前視偏差)。
+
+    第一筆部位 100 元虧 90(因果口徑 90%),之後 39 筆用 100 萬部位 ——
+    舊算法拿整段最大部位當分母,會把 90% 稀釋成 0.009%。
+    """
+    ts = [_t(-90, 1, 100, 0)] + [_t(100, 10000, 100, i + 1) for i in range(39)]
+    m = compute_metrics(TradeLog(trades=ts, source="t", account_label="t"))
+    assert abs(m.max_drawdown_pct - 0.9) < 1e-9, \
+        f"未來部位稀釋了早期回撤:{m.max_drawdown_pct:.4%}"
+
+
+def test_json_no_infinity_anywhere():
+    """全勝紀錄的完整 as_dict(含 OOS/per-tag)不得含 Infinity/NaN。"""
+    import json as _json
+    from core.analyzer import analyze_log
+
+    trades = [_t(100.0, offset=i) for i in range(30)]
+    for i, t in enumerate(trades):
+        t.tag = "全勝策略"
+    r = analyze_log(TradeLog(trades=trades, source="t", account_label="t"),
+                    n_bootstrap=200)
+    _json.dumps(r.as_dict(), allow_nan=False)  # 有漏就 ValueError
+
+
+def test_severe_drawdown_needs_reliable_pct():
+    """pnl-only 資料的回撤 %「無法計算」:不得同時拿它發 severe_drawdown。"""
+    from core.verdict.judge import _scan_red_flags
+    from core.verdict.statistics import test_expectancy_positive
+
+    trades = [Trade(symbol="X", market=Market.US_STOCK, side=Side.LONG,
+                    entry_time=datetime(2026, 1, 1), exit_time=datetime(2026, 1, 1),
+                    entry_price=0.0, exit_price=0.0, quantity=0.0, fees=0.0,
+                    pnl=p) for p in ([100.0] * 5 + [-60.0] + [10.0] * 24)]
+    m = compute_metrics(TradeLog(trades=trades, source="t", account_label="t"))
+    assert not m.drawdown_pct_reliable
+    sig = test_expectancy_positive([t.pnl for t in trades], n_bootstrap=200)
+    flags = _scan_red_flags(m, sig)
+    assert not any(f.code == "severe_drawdown" for f in flags), \
+        "報告說回撤 % 無法計算,裁決卻拿它定罪 —— 通道不一致"
+
+
+def test_taf_low_price_exception():
+    """成交價低於每股 TAF 費率時不收 TAF(FINRA 低價例外)。"""
+    from core.ingest.costs import CostModel
+
+    m = CostModel(commission_rate=0, commission_min=0, tax_rate=0,
+                  slippage_rate=0, sell_per_share_fee=0.000195,
+                  sell_per_share_fee_cap=9.79)
+    assert m.estimate(0.0001, 100, is_sell=True) == 0.0
+    assert m.estimate(1.0, 100, is_sell=True) > 0.0
+
+
+def test_day_trade_model_keeps_new_fields():
+    """當沖減半複製 CostModel 時不得清零新欄位(dataclasses.replace)。"""
+    import dataclasses
+    from core.ingest.costs import CostModel
+
+    m = CostModel(commission_rate=0.001425, commission_min=20, tax_rate=0.003,
+                  slippage_rate=0.0005, sell_per_share_fee=0.1,
+                  sell_per_share_fee_cap=5.0)
+    m2 = dataclasses.replace(m, tax_rate=0.0015)
+    assert m2.sell_per_share_fee == 0.1 and m2.sell_per_share_fee_cap == 5.0
+
+
+def test_cp950_read_is_disclosed_in_source():
+    """cp950 回退讀取必須在 source 揭露(亂碼時使用者才有線索)。"""
+    from core.ingest.loader import load_trades
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "b5.csv"
+        p.write_bytes(
+            ("symbol,pnl,tag\n2330,100,測試策略\n").encode("cp950"))
+        log = load_trades(str(p))
+        assert "cp950" in log.source or "Big5" in log.source
+        # 合法 UTF-8 檔不得標 cp950
+        p2 = Path(td) / "u8.csv"
+        p2.write_text("symbol,pnl,tag\n2330,100,測試策略\n", encoding="utf-8")
+        log2 = load_trades(str(p2))
+        assert "cp950" not in log2.source
+        assert log2.trades[0].tag == "測試策略"
+
+
+def test_credential_fields_cover_all_brokers():
+    """_CREDENTIAL_FIELDS 必須涵蓋全部券商(新增券商漏建映射要被抓到)。"""
+    from core.broker import BROKER_TEMPLATES
+    from core.scaffold.templates import _CREDENTIAL_FIELDS
+
+    assert set(_CREDENTIAL_FIELDS.keys()) == set(BROKER_TEMPLATES.keys()), \
+        f"映射與註冊表不同步:{set(_CREDENTIAL_FIELDS) ^ set(BROKER_TEMPLATES)}"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

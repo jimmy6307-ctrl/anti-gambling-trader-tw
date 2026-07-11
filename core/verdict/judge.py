@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ..metrics.performance import PerformanceMetrics, compute_metrics
+from ..metrics.performance import PerformanceMetrics, compute_metrics, fmt_ratio
 from ..models import TradeLog
 from .statistics import (
     SignificanceResult,
@@ -140,7 +140,7 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
         if 0 < edge_margin < 0.25 * max(breakeven_payoff, 1e-9):
             flags.append(RedFlag(
                 "thin_edge_margin", "medium",
-                f"你的盈虧比 {m.payoff_ratio:.2f} 只比打平門檻 {breakeven_payoff:.2f} "
+                f"你的盈虧比 {fmt_ratio(m.payoff_ratio)} 只比打平門檻 {breakeven_payoff:.2f} "
                 f"高一點點(安全邊際 {edge_margin:.2f})。"
                 f"以你 {m.win_rate:.0%} 的勝率,只要勝率稍微下滑,期望值就會由正翻負;"
                 "而且平均要贏好幾次,才補得回一次大虧。這種優勢很脆弱。"
@@ -149,7 +149,9 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
     # 4. 極端回撤:即使最終獲利,過程中也曾瀕臨毀滅。
     #    high 而非 medium —— 帳戶曾腰斬的策略不可拿「具統計優勢」的綠色
     #    裁決(決策樹只用 high 警訊降級,medium 擋不住)。寧可錯殺。
-    if m.max_drawdown_pct > 0.5:
+    #    只有回撤 % 可靠(有資本基準)時才發:pnl-only 資料的 % 是
+    #    「無法計算」,報告都這麼說了,裁決卻拿它定罪是兩個通道打架。
+    if m.drawdown_pct_reliable and m.max_drawdown_pct > 0.5:
         flags.append(RedFlag(
             "severe_drawdown", "high",
             f"最大回撤達 {m.max_drawdown_pct:.0%}。"
@@ -278,6 +280,7 @@ def judge(
                 "🎲 高度存疑:你帳面上賺錢,但統計檢定無法排除『這只是運氣』的可能。"
             )
         else:
+            # 不變量:分支 B 已攔截 expectancy < 0,能到這裡的非正值只有 0
             headline = (
                 "🎲 沒有優勢跡象:你目前恰好打平(期望值 0),"
                 "統計上更無法主張存在正優勢 —— 扣掉沒算到的成本,很可能其實是負。"
@@ -320,7 +323,7 @@ def judge(
         reasons.append("但偵測到高嚴重度警訊或安全邊際過薄(見下方),"
                        "這類結構往往『贏到一半才爆』。")
         advice += [
-            "先解決高嚴重度警訊,再考慮放大部位。",
+            "先解決上述結構性警訊(高嚴重度警訊或過薄的安全邊際),再考慮放大部位。",
             "做樣本外回測(用本工具的 backtest 模組)驗證優勢是否延續到沒看過的資料。",
         ]
 
