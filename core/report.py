@@ -5,7 +5,7 @@ from __future__ import annotations
 from .antiscam.signals import scam_warnings_for
 from .backtest.validate import OutOfSampleReport
 from .metrics.breakeven import compute_break_even
-from .metrics.performance import PerformanceMetrics
+from .metrics.performance import PerformanceMetrics, fmt_ratio
 from .markets import uncovered_cost_warnings
 from .models import TradeLog
 from .strategy.profiler import StrategyProfile
@@ -45,14 +45,16 @@ def render_text_report(
     m = metrics
     L.append("【核心績效】")
     L.append(f"  交易筆數      : {m.total_trades}(勝 {m.wins} / 負 {m.losses})")
-    L.append(f"  勝率          : {m.win_rate:.1%}")
-    L.append(f"  盈虧比        : {m.payoff_ratio:.2f}(平均賺 {_money(m.avg_win)} / 平均賠 {_money(m.avg_loss)})")
-    L.append(f"  獲利因子      : {m.profit_factor:.2f}")
+    L.append(f"  勝率          : {m.win_rate:.1%}(含打平;打平 {m.breakeven} 筆)")
+    L.append(f"  盈虧比        : {fmt_ratio(m.payoff_ratio)}(平均賺 {_money(m.avg_win)} / 平均賠 {_money(m.avg_loss)})")
+    L.append(f"  獲利因子      : {fmt_ratio(m.profit_factor)}")
     L.append(f"  每筆期望值    : {_money(m.expectancy)}  ← 最關鍵的單一數字")
     L.append(f"  總損益        : {_money(m.total_pnl)}(已扣估計成本 {_money(m.total_fees)})")
-    L.append(f"  最大回撤      : {_money(m.max_drawdown)}({m.max_drawdown_pct:.1%})")
+    dd_pct_txt = (f"{m.max_drawdown_pct:.1%}" if m.drawdown_pct_reliable
+                  else "%無法計算 — 缺進場價/數量,沒有資本基準")
+    L.append(f"  最大回撤      : {_money(m.max_drawdown)}({dd_pct_txt})")
     L.append(f"  最長連虧      : {m.max_consecutive_losses} 次")
-    L.append(f"  夏普 / 索提諾 : {m.sharpe:.2f} / {m.sortino:.2f}(每筆基準,非年化)")
+    L.append(f"  夏普 / 索提諾 : {fmt_ratio(m.sharpe)} / {fmt_ratio(m.sortino)}(每筆基準,非年化)")
     L.append(f"  單筆最大賺/賠 : {_money(m.largest_win)} / {_money(m.largest_loss)}")
     # 「最賺一筆佔比」只在有 2 筆以上獲利時才有意義(僅 1 筆時必為 100%,是噪音)
     if m.wins > 1:

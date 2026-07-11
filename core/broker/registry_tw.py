@@ -208,7 +208,7 @@ _TW_FUTURES = BrokerTemplate(
     key="tw_futures",
     name="群益 / 統一 / 元富 期貨類 API(台期)",
     market="tw_stock",
-    sdk_install="群益:官方 SKCOM.dll(社群套件 pip install skcom);統一/元富依官方文件",
+    sdk_install="群益:官方 SKCOM.dll(pip install comtypes skcom,COM 元件需另註冊);統一/元富依官方文件",
     notes=(
         "⚠️ 這是『期貨類』通用骨架。群益官方為 SKCOM.dll(Windows COM 元件,"
         "需註冊;社群 skcom 套件主要支援報價,下單/期貨需另行處理)。"

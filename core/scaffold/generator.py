@@ -128,8 +128,16 @@ def _build_broker_lib() -> str:
     base_src = (broker_dir / "base.py").read_text(encoding="utf-8")
     paper_src = (broker_dir / "paper.py").read_text(encoding="utf-8")
 
-    # 移除 paper.py 開頭對 .base 的相對匯入(類別將合併在同一檔)
+    # 移除 paper.py 開頭對 .base 的相對匯入(類別將合併在同一檔)。
+    # 同時支援括號多行與單行兩種寫法 —— 只支援一種的話,日後 paper.py
+    # 改寫 import 形式會讓產出專案帶著壞掉的相對匯入,靜默炸在使用者端。
     paper_src = re.sub(r"from \.base import \([^)]*\)\n", "", paper_src)
+    paper_src = re.sub(r"from \.base import [^\n(]+\n", "", paper_src)
+    if "from .base" in paper_src or "from . import" in paper_src:
+        raise RuntimeError(
+            "broker_lib 合併失敗:paper.py 仍殘留相對匯入,"
+            "請更新 _build_broker_lib() 的剝除規則"
+        )
 
     # 兩個檔各自的模組 docstring 與 `from __future__` 都要剝掉,
     # 因為合併後整檔只能有一個檔首 docstring、且 `from __future__` 必須

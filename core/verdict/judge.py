@@ -114,7 +114,8 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
         ))
 
     # 2. 獲利集中於少數暴賺:像中樂透,不是穩定優勢
-    if m.top_trade_pnl_share > 0.5 and m.wins > 1:
+    # wins >= 1:「唯一一筆獲利佔 100%」正是最極端的集中,不可反而漏掉
+    if m.top_trade_pnl_share > 0.5 and m.wins >= 1:
         flags.append(RedFlag(
             "concentrated_profit", "high",
             f"光是最賺的一筆,就佔了總獲利的 {m.top_trade_pnl_share:.0%}。"
@@ -138,17 +139,19 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
         edge_margin = m.payoff_ratio - breakeven_payoff
         if 0 < edge_margin < 0.25 * max(breakeven_payoff, 1e-9):
             flags.append(RedFlag(
-                "thin_edge_margin", "low",
+                "thin_edge_margin", "medium",
                 f"你的盈虧比 {m.payoff_ratio:.2f} 只比打平門檻 {breakeven_payoff:.2f} "
                 f"高一點點(安全邊際 {edge_margin:.2f})。"
                 f"以你 {m.win_rate:.0%} 的勝率,只要勝率稍微下滑,期望值就會由正翻負;"
                 "而且平均要贏好幾次,才補得回一次大虧。這種優勢很脆弱。"
             ))
 
-    # 4. 極端回撤:即使最終獲利,過程中也曾瀕臨毀滅
+    # 4. 極端回撤:即使最終獲利,過程中也曾瀕臨毀滅。
+    #    high 而非 medium —— 帳戶曾腰斬的策略不可拿「具統計優勢」的綠色
+    #    裁決(決策樹只用 high 警訊降級,medium 擋不住)。寧可錯殺。
     if m.max_drawdown_pct > 0.5:
         flags.append(RedFlag(
-            "severe_drawdown", "medium",
+            "severe_drawdown", "high",
             f"最大回撤達 {m.max_drawdown_pct:.0%}。"
             "這代表過程中你的帳戶曾腰斬以上 — 多數人撐不過這種壓力。"
         ))
@@ -269,32 +272,53 @@ def judge(
     elif not sig.is_significant:
         level = VerdictLevel.LUCK_SUSPECTED
         discourage = True
-        headline = (
-            "🎲 高度存疑:你帳面上賺錢,但統計檢定無法排除『這只是運氣』的可能。"
-        )
+        # 措辭跟著數字走:期望值恰為 0 時說「帳面上賺錢」是說假話
+        if m.expectancy > 0:
+            headline = (
+                "🎲 高度存疑:你帳面上賺錢,但統計檢定無法排除『這只是運氣』的可能。"
+            )
+        else:
+            headline = (
+                "🎲 沒有優勢跡象:你目前恰好打平(期望值 0),"
+                "統計上更無法主張存在正優勢 —— 扣掉沒算到的成本,很可能其實是負。"
+            )
         reasons.append(
             f"平均每筆損益的 bootstrap p 值為 {sig.p_value_bootstrap:.3f}"
             f"(t 檢定 p={sig.p_value_t:.3f}),未達顯著(需 < 0.05)。"
         )
-        reasons.append(
-            f"平均損益的 95% 信賴區間為 [{sig.ci_low:.2f}, {sig.ci_high:.2f}]"
-            " — 區間涵蓋 0,代表真實期望值有可能根本不為正。"
-        )
+        # CI 涵蓋 0 要「檢查後才說」:單尾 p 與雙尾 CI 口徑不同,
+        # 存在 p 不顯著但 CI 全正的組合 —— 硬寫「涵蓋 0」就是說假話
+        if sig.ci_low <= 0 <= sig.ci_high:
+            reasons.append(
+                f"平均損益的 95% 信賴區間為 [{sig.ci_low:.2f}, {sig.ci_high:.2f}]"
+                " — 區間涵蓋 0,代表真實期望值有可能根本不為正。"
+            )
+        else:
+            reasons.append(
+                f"平均損益的 95% 信賴區間為 [{sig.ci_low:.2f}, {sig.ci_high:.2f}]。"
+                "區間雖未涵蓋 0,但裁決以 bootstrap 單尾 p 值(未達顯著)從嚴認定 —— "
+                "兩種統計口徑不一致時,本工具一律取保守的一邊。"
+            )
         advice += [
-            "別把這段獲利當成『驗證成功』。在統計上,它和『運氣好』無法區分。",
+            ("別把這段獲利當成『驗證成功』。在統計上,它和『運氣好』無法區分。"
+             if m.expectancy > 0 else
+             "連帳面獲利都還沒有 —— 別把『沒賠』誤讀成『安全』。"),
             "繼續累積樣本,並嚴格執行同一套規則,看顯著性是否隨樣本增加而成立。",
             "倖存者偏差提醒:你只看到自己這次賺了,沒看到無數用同樣方法賠光退場的人。",
         ]
 
-    # D. 統計顯著,但有高風險警訊 → 脆弱優勢
-    elif high_flags:
+    # D. 統計顯著,但有高風險警訊或安全邊際過薄 → 脆弱優勢。
+    #    thin_edge_margin 的定義就是「勝率小幅下滑就翻負」—— 這正是
+    #    FRAGILE_EDGE 存在的理由,若不降級,「脆弱」只是空話。
+    elif high_flags or any(f.code == "thin_edge_margin" for f in flags):
         level = VerdictLevel.FRAGILE_EDGE
         discourage = True
         headline = (
             "🟡 優勢脆弱:統計上看似有效,但存在嚴重結構性風險,隨時可能崩潰。"
         )
         reasons.append("平均期望值通過了統計顯著性檢定,代表可能存在真實優勢。")
-        reasons.append("但偵測到高嚴重度警訊(見下方),這類結構往往『贏到一半才爆』。")
+        reasons.append("但偵測到高嚴重度警訊或安全邊際過薄(見下方),"
+                       "這類結構往往『贏到一半才爆』。")
         advice += [
             "先解決高嚴重度警訊,再考慮放大部位。",
             "做樣本外回測(用本工具的 backtest 模組)驗證優勢是否延續到沒看過的資料。",

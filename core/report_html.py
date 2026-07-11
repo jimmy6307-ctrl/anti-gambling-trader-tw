@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from html import escape as _esc
 
+from .metrics.performance import fmt_ratio as _fr
+
 
 def h(x) -> str:
     """脈絡安全的跳脫(含引號,可放進屬性)。"""
@@ -257,10 +259,10 @@ color:#6b7280;font-size:12px}}
 <div class="grid">
   <div class="stat"><div class="k">交易筆數</div><div class="v">{m.total_trades}</div></div>
   <div class="stat"><div class="k">勝率</div><div class="v">{m.win_rate:.1%}</div></div>
-  <div class="stat"><div class="k">盈虧比</div><div class="v">{m.payoff_ratio:.2f}</div></div>
+  <div class="stat"><div class="k">盈虧比</div><div class="v">{h(_fr(m.payoff_ratio))}</div></div>
   <div class="stat"><div class="k">每筆期望值</div><div class="v">{m.expectancy:,.2f}</div></div>
   <div class="stat"><div class="k">總損益</div><div class="v">{m.total_pnl:,.2f}</div></div>
-  <div class="stat"><div class="k">最大回撤</div><div class="v">{m.max_drawdown_pct:.1%}</div></div>
+  <div class="stat"><div class="k">最大回撤</div><div class="v">{(f"{m.max_drawdown_pct:.1%}" if m.drawdown_pct_reliable else "無法計算")}</div></div>
 </div>
 
 <h2>累積損益曲線</h2>
@@ -327,7 +329,7 @@ border:1px solid #7f1d1d;border-radius:8px;font-size:13px;color:#fca5a5}}
   <div class="head">{h(v.headline)}</div>
   <div class="row"><span>交易筆數</span><b>{m.total_trades}</b></div>
   <div class="row"><span>勝率</span><b>{m.win_rate:.0%}</b></div>
-  <div class="row"><span>盈虧比</span><b>{m.payoff_ratio:.2f}</b></div>
+  <div class="row"><span>盈虧比</span><b>{h(_fr(m.payoff_ratio))}</b></div>
   <div class="row"><span>每筆期望值</span><b>{m.expectancy:,.0f}</b></div>
   <div class="row"><span>總損益</span><b>{m.total_pnl:,.0f}</b></div>
   {guru_line}

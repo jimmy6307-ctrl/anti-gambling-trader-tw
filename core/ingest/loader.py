@@ -188,11 +188,22 @@ def _rows_from_csv(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
     import csv
 
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
-        rows = list(reader)
-        columns = reader.fieldnames or []
-    return list(columns), rows
+    # 編碼回退:繁中版 Excel「另存 CSV」預設是 ANSI(cp950/Big5),
+    # 只認 UTF-8 會讓照著文件操作的新手直接吃 UnicodeDecodeError。
+    # 先試 UTF-8(含 BOM),失敗再試 cp950 —— 都失敗才報錯。
+    for enc in ("utf-8-sig", "cp950"):
+        try:
+            with path.open("r", encoding=enc, newline="") as f:
+                reader = csv.DictReader(f, delimiter=delimiter)
+                rows = list(reader)
+                columns = reader.fieldnames or []
+            return list(columns), rows
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(
+        f"無法解讀 {path.name} 的文字編碼(試過 UTF-8 與 Big5)。"
+        "請用 Excel 另存為『CSV UTF-8』格式後重試。"
+    )
 
 
 def _rows_from_json(path: Path) -> tuple[list[str], list[dict[str, Any]]]:

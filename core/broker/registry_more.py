@@ -286,10 +286,11 @@ class TradierBroker(BrokerAdapter):
 
     def cancel_order(self, order_id: str) -> bool:
         import requests
-        requests.delete(
+        resp = requests.delete(
             f"{{self.base}}/accounts/{{self.account_id}}/orders/{{order_id}}",
             headers=self._headers())
-        return True
+        # 無條件回 True 會騙人:token 失效/單號不存在時取消其實失敗了
+        return resp.ok
 ''',
 )
 

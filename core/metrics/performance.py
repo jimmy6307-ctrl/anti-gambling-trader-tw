@@ -61,16 +61,48 @@ class PerformanceMetrics:
     avg_holding_days: float = 0.0
     is_mostly_intraday: bool = False  # 是否多為當沖/極短線(影響賭博判斷)
 
+    # 回撤百分比是否可靠:pnl-only 資料無資本基準時為 False,
+    # 顯示層必須說「無法計算」而不是印假的 0%
+    drawdown_pct_reliable: bool = True
+
     def as_dict(self) -> dict:
         d = self.__dict__.copy()
         # r_multiples 通常很長,摘要即可
         d["r_multiples_count"] = len(self.r_multiples)
         d.pop("r_multiples", None)
+        # JSON 沒有 Infinity(json.dumps 會輸出非標準的 Infinity 字面值,
+        # 下游解析器會炸)—— inf 語意是「不適用」,序列化成 null
+        for k, v in list(d.items()):
+            if isinstance(v, float) and math.isinf(v):
+                d[k] = None
         return d
 
 
 def _safe_div(a: float, b: float) -> float:
+    """「缺資料歸零」型除法:比例/平均值在分母 0 時回 0(如勝率、平均)。"""
     return a / b if b else 0.0
+
+
+def _ratio(num: float, den: float) -> float:
+    """「上界無限」型除法:盈虧比/獲利因子/夏普這類比率,分母 0 且分子為正
+    的語意是「無虧損(無下行),不適用/無上界」—— 收成 0 會把最好的樣本
+    顯示成最差(0 = 沒有獲利因子),是數字說假話。回傳 math.inf,
+    由顯示層轉成「∞(無虧損)」、JSON 層轉 null。
+    """
+    if den:
+        return num / den
+    if num > 0:
+        return math.inf
+    if num < 0:
+        return -math.inf
+    return 0.0
+
+
+def fmt_ratio(x: float, decimals: int = 2) -> str:
+    """比率顯示:inf → 「∞(無虧損/無下行)」,絕不印成 0 或 inf 字樣。"""
+    if math.isinf(x):
+        return "∞(無虧損/無下行)" if x > 0 else "N/A"
+    return f"{x:.{decimals}f}"
 
 
 def compute_metrics(log: TradeLog) -> PerformanceMetrics:
@@ -99,8 +131,10 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
 
     m.avg_win = _safe_div(m.gross_profit, m.wins)
     m.avg_loss = _safe_div(m.gross_loss, m.losses)
-    m.payoff_ratio = _safe_div(m.avg_win, m.avg_loss)
-    m.profit_factor = _safe_div(m.gross_profit, m.gross_loss)
+    # 比率型指標走 _ratio:全勝樣本的盈虧比/獲利因子是「無虧損,不適用」,
+    # 不是 0 —— 0 會被讀成「最差」,對全贏紀錄是顛倒黑白
+    m.payoff_ratio = _ratio(m.avg_win, m.avg_loss)
+    m.profit_factor = _ratio(m.gross_profit, m.gross_loss)
 
     # 期望值:每筆交易平均能賺/賠多少
     # E = 勝率 × 平均獲利 − 敗率 × 平均虧損
@@ -109,13 +143,20 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
 
     # ── R-multiple:把每筆損益用「該筆的風險」標準化 ──
     # 以「平均虧損」作為 1R 的代理(沒有明確停損時的常見近似)。
-    one_r = m.avg_loss if m.avg_loss > 0 else (abs(min(pnls)) if pnls else 1.0)
-    one_r = one_r or 1.0
-    m.r_multiples = [p / one_r for p in pnls]
-    m.expectancy_r = _safe_div(sum(m.r_multiples), len(m.r_multiples))
+    # 完全沒有虧損時 R 沒有定義(拿最小獲利當風險單位是張冠李戴),
+    # 誠實留空,不編一個跨樣本不可比的數字。
+    if m.avg_loss > 0:
+        one_r = m.avg_loss
+        m.r_multiples = [p / one_r for p in pnls]
+        m.expectancy_r = _safe_div(sum(m.r_multiples), len(m.r_multiples))
+    else:
+        m.r_multiples = []
+        m.expectancy_r = 0.0
 
-    m.largest_win = max(pnls) if pnls else 0.0
-    m.largest_loss = min(pnls) if pnls else 0.0
+    # largest_win 只從獲利單取、largest_loss 只從虧損單取(保留負號)——
+    # 全勝時 min(pnls) 是「最小獲利」,填進 largest_loss 是欄位說謊
+    m.largest_win = max(win_pnls, default=0.0)
+    m.largest_loss = min(loss_pnls, default=0.0)
     # 最賺一筆佔總獲利比例:過高代表獲利集中在運氣,非穩定優勢
     m.top_trade_pnl_share = _safe_div(max(pnls, default=0.0), m.gross_profit)
 
@@ -133,19 +174,29 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     position_sizes = [t.contract_value for t in trades]
     capital_base = max(position_sizes, default=0.0)
 
+    # 回撤百分比必須用「當下」的高水位算,不可事後用最終峰值回算 ——
+    # 後者是前視偏差:回撤發生後的獲利會回頭稀釋早期回撤
+    # (先虧 90% 再暴賺,最終峰值會把 90% 稀釋成個位數,嚴重低估風險)。
     equity = 0.0
     peak = 0.0
     max_dd = 0.0
+    max_dd_pct = 0.0
     for p in pnls:
         equity += p
         peak = max(peak, equity)
         dd = peak - equity
         if dd > max_dd:
             max_dd = dd
+        denom_now = capital_base + peak  # 當下帳戶能動用的高水位
+        if denom_now > 0:
+            dd_pct = dd / denom_now
+            if dd_pct > max_dd_pct:
+                max_dd_pct = dd_pct
     m.max_drawdown = max_dd
-    # 以初始資本為基準;資本基準加上已實現峰值,反映「帳戶真正能動用的高水位」
-    denom = capital_base + peak
-    m.max_drawdown_pct = _safe_div(max_dd, denom) if denom > 0 else 0.0
+    m.max_drawdown_pct = max_dd_pct
+    # pnl-only 資料(無進場價/數量)沒有資本基準:金額算得出、百分比算不出。
+    # 標記不可靠,顯示層要說「無法計算」而不是印一個假的 0%。
+    m.drawdown_pct_reliable = capital_base > 0
 
     # ── 最長連續虧損 ──
     streak = 0
@@ -166,20 +217,22 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     if n > 1:
         var = sum((r - mean_ret) ** 2 for r in returns) / (n - 1)
         std = math.sqrt(var)
-        m.sharpe = _safe_div(mean_ret, std)
+        # 零波動(全部報酬相同)的夏普是「不適用」,不是 0
+        m.sharpe = _ratio(mean_ret, std)
         # 下行偏差:標準定義的分母是「全部樣本數」,不是只有下行筆數。
         # 用 len(downside) 當分母會系統性高估下行偏差、低估 Sortino,
         # 且方向錯誤(好策略下行少、分母小,反而被壓低)。以 0 為門檻,
         # 對每筆取 min(r, 0)^2,分母用 n-1 與夏普一致。
         dvar = sum(min(r, 0.0) ** 2 for r in returns) / (n - 1)
         dstd = math.sqrt(dvar)
-        m.sortino = _safe_div(mean_ret, dstd)
+        m.sortino = _ratio(mean_ret, dstd)
 
     # ── 交易風格 ──
     holding = [t.holding_days for t in trades]
     m.avg_holding_days = _safe_div(sum(holding), len(holding))
     # 當沖判定統一用 Trade.is_day_trade(同一交易日),與成本估算口徑一致
     intraday_count = sum(1 for t in trades if t.is_day_trade)
-    m.is_mostly_intraday = _safe_div(intraday_count, len(trades)) > INTRADAY_RATIO_THRESHOLD
+    # >=:恰好 70% 當沖也算「以當沖為主」(文件口徑「超過七成」含臨界)
+    m.is_mostly_intraday = _safe_div(intraday_count, len(trades)) >= INTRADAY_RATIO_THRESHOLD
 
     return m

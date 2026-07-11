@@ -216,7 +216,9 @@ def required_sample_size(win_rate: float, payoff_ratio: float) -> int:
     這是一個經驗性的指引值,不是嚴格的統計檢定力分析,
     目的是讓使用者對「我交易的次數夠不夠」有量化的概念。
     """
-    if win_rate <= 0 or win_rate >= 1 or payoff_ratio <= 0:
+    # 無虧損樣本的 payoff_ratio 是 inf(不適用):二項模型算不了
+    # (inf-inf=NaN),回預設門檻,由呼叫端的樣本量判斷去把關
+    if win_rate <= 0 or win_rate >= 1 or payoff_ratio <= 0 or math.isinf(payoff_ratio):
         return 100
 
     # 每筆的期望(R 為單位)與其變異,用來估所需樣本

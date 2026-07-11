@@ -188,6 +188,12 @@ def uncovered_cost_warnings(market: Market) -> list[str]:
             "加密貨幣永續合約的資金費率(funding rate)未建模。"
             "若你做的是永續合約,請把資金費用計入 fees。"
         )
+    if market == Market.TW_ETF:
+        out.append(
+            "債券 ETF 至 2026-12-31 暫停課徵證交稅,但本工具無法從代號辨識"
+            "股票型/債券型,一律用股票型 0.1% 保守估算 —— 若你交易的是債券 ETF,"
+            "賣出稅被高估,請在 fees 欄位填實際費用。"
+        )
     if market in (Market.TW_FUTURES, Market.TW_OPTIONS):
         out.append(
             "期貨/選擇權的保證金追繳、強制平倉未建模;報酬率以契約價值為母體計算,"

@@ -38,6 +38,10 @@ class CostModel:
     slippage_rate: float
     commission_per_unit: float = 0.0
     tax_both_sides: bool = False
+    # 賣出端「按股數」計的規費(美股 FINRA TAF 結構):每股費率 + 每筆上限。
+    # 0 = 不適用。
+    sell_per_share_fee: float = 0.0
+    sell_per_share_fee_cap: float = 0.0
 
     def estimate(
         self,
@@ -59,8 +63,14 @@ class CostModel:
         )
         charge_tax = is_sell or self.tax_both_sides
         tax = value * self.tax_rate if charge_tax else 0.0
+        # 賣出端按股數的規費(FINRA TAF):每股 × 股數,有每筆上限
+        per_share = 0.0
+        if is_sell and self.sell_per_share_fee > 0:
+            per_share = self.sell_per_share_fee * abs(quantity)
+            if self.sell_per_share_fee_cap > 0:
+                per_share = min(per_share, self.sell_per_share_fee_cap)
         slippage = value * self.slippage_rate
-        return commission + tax + slippage
+        return commission + tax + per_share + slippage
 
 
 # 各市場的預設成本模型(2026 年常見值,僅供估算)。
@@ -72,12 +82,17 @@ DEFAULT_COST_MODELS: dict[Market, CostModel] = {
         tax_rate=0.003,
         slippage_rate=0.0005,
     ),
-    # 美股:多數券商零佣金,但有 SEC/FINRA 規費與點差滑價
+    # 美股:多數券商零佣金,但有 SEC/FINRA 規費與點差滑價。
+    # 費率 as_of 2026-04(法定費率每年調整,估算值,非精算):
+    #   SEC Section 31:賣出 $20.60 / 百萬美元(FY2026,2026-04-04 生效)
+    #   FINRA TAF:賣出每股 $0.000195,每筆上限 $9.79
     Market.US_STOCK: CostModel(
         commission_rate=0.0,
         commission_min=0.0,
-        tax_rate=0.0000278,       # SEC 規費等,僅賣出
+        tax_rate=0.0000206,
         slippage_rate=0.0005,
+        sell_per_share_fee=0.000195,
+        sell_per_share_fee_cap=9.79,
     ),
     # 加密貨幣:交易所現貨手續費約 0.1%(雙邊),滑價在小幣上可能很大
     Market.CRYPTO: CostModel(
@@ -86,7 +101,9 @@ DEFAULT_COST_MODELS: dict[Market, CostModel] = {
         tax_rate=0.0,
         slippage_rate=0.0010,
     ),
-    # 台股 ETF:證交稅 0.1%(股票型),非一般股票的 0.3%
+    # 台股 ETF:證交稅 0.1%(股票型)。債券 ETF 至 2026-12-31 暫停課徵,
+    # 但無法從代號辨識型別 —— 一律用股票型 0.1% 保守估(寧可估貴),
+    # 並在 markets.uncovered_cost_warnings 對使用者揭露這件事。
     Market.TW_ETF: CostModel(
         commission_rate=0.001425,
         commission_min=20.0,

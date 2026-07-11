@@ -105,6 +105,31 @@ def _broker_keys_comment() -> str:
     return " | ".join(["paper"] + sorted(BROKER_TEMPLATES.keys()))
 
 
+# 各券商建構子需要的 credentials 欄位(與 registry 範本的 __init__ 簽名一致)。
+# 固定產 api_key/api_secret 會讓 12 個券商有 9 個照表填卻對不上建構子
+# (第 8 輪券商層稽核逐一實測的簽名)。
+_CREDENTIAL_FIELDS: dict[str, list[str]] = {
+    "binance": ['api_key: ""', 'api_secret: ""', "testnet: true"],
+    "ibkr": ['host: "127.0.0.1"', "port: 7497", "client_id: 1"],
+    "alpaca": ['api_key: ""', 'api_secret: ""', "paper: true"],
+    "shioaji": ['api_key: ""', 'secret_key: ""', "simulation: true"],
+    "yuanta": ['account: ""', 'password: ""', "simulation: true"],
+    "fubon": ['account_id: ""', 'password: ""', 'cert_path: ""', 'cert_password: ""'],
+    "kgi": ['account: ""', 'password: ""', "simulation: true"],
+    "tw_futures": ['account: ""', 'password: ""', 'broker: ""'],
+    "ccxt": ['exchange_id: "binance"', 'api_key: ""', 'api_secret: ""',
+             'password: ""', "sandbox: true"],
+    "okx": ['api_key: ""', 'api_secret: ""', 'passphrase: ""', "sandbox: true"],
+    "bybit": ['api_key: ""', 'api_secret: ""', "testnet: true"],
+    "tradier": ['access_token: ""', 'account_id: ""', "sandbox: true"],
+}
+
+
+def _credentials_block(broker_key: str) -> str:
+    fields = _CREDENTIAL_FIELDS.get(broker_key, ['api_key: ""', 'api_secret: ""'])
+    return "\n".join(f"  {f}" for f in fields)
+
+
 def config_yaml(opts, discouraged: bool, verdict_level: str) -> str:
     return f"""# {opts.project_name} 設定檔範本
 # 複製成 config.yaml 後填入你的實際值。config.yaml 已被 .gitignore 排除。
@@ -115,10 +140,10 @@ symbols:
 
 broker: {opts.broker}        # 可選:{_broker_keys_comment()}
 
-# 真實券商金鑰（紙上模擬不需要）。請勿提交到 git。
+# 真實券商連線資訊（紙上模擬不需要）。欄位已對應 brokers/ 範本的建構子簽名。
+# 請勿提交到 git。
 credentials:
-  api_key: ""
-  api_secret: ""
+{_credentials_block(opts.broker)}
 
 paper:
   starting_cash: 1000000
