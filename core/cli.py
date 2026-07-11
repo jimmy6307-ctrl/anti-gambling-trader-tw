@@ -307,7 +307,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="主要市場(省略時會從標的代號自動推斷)",
     )
     s.add_argument(
-        "--symbols", default="AAPL", help="標的代號,逗號分隔(如 AAPL,MSFT)"
+        # default=None 才能區分「使用者沒給」與「使用者明確給了 AAPL」——
+        # 用預設值當哨兵會把明確輸入 AAPL 的人誤判成沒指定,被分析檔覆蓋
+        "--symbols", default=None, help="標的代號,逗號分隔(如 AAPL,MSFT;預設 AAPL)"
     )
     s.add_argument(
         "--from-analysis",
@@ -799,15 +801,15 @@ def _cmd_scaffold(args) -> int:
         except (ValueError, FileNotFoundError, ImportError) as exc:
             print(f"警告:分析交易紀錄失敗({exc}),改以無裁決方式產生。", file=sys.stderr)
 
-    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    if inferred_symbols and args.symbols == "AAPL":
-        symbols = inferred_symbols   # 使用者沒自訂 symbols 時,用分析來的
+    user_set_symbols = args.symbols is not None
+    symbols = [s.strip() for s in (args.symbols or "").split(",") if s.strip()]
+    if not symbols:
+        symbols = inferred_symbols or ["AAPL"]   # 沒自訂就用分析來的,再不然預設
 
     # market 推斷優先序:--market 指定 > --from-analysis 繼承 > 從標的代號推斷。
     # 但使用者「明確自訂了 --symbols」時,繼承會與標的矛盾
     # (分析檔是台股、標的卻是 AAPL,產出 market: tw_stock 配美股)——
     # 此時改依標的推斷,繼承只在 symbols 也來自分析檔時使用。
-    user_set_symbols = args.symbols != "AAPL"
     market = args.market
     if market is None and inferred_market and not user_set_symbols:
         market = inferred_market

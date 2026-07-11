@@ -88,7 +88,7 @@ _CRYPTO_QUOTE = re.compile(r"(USDT|USDC|BUSD|DAI)$", re.IGNORECASE)
 # 裸前綴比對是真實 bug:SOL(NYSE 真實代號)、ETHA(iShares 以太幣 ETF)、
 # SOLAR 等美股會被劫持成 crypto,套用完全錯誤的成本模型。
 _CRYPTO_BASE = re.compile(
-    r"^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB)(?=[-/_]|(USD|EUR|JPY|GBP|TWD|KRW)$)",
+    r"^(BTC|ETH|SOL|XRP|DOGE|ADA|BNB)(?=[-/_]|(USD|EUR|JPY|GBP|TWD|KRW|BTC|ETH|BNB)$)",
     re.IGNORECASE,
 )
 # 裸幣名(無計價幣)與證券代號空間衝突(SOL/ADA 都可能是美股代號),

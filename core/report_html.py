@@ -142,6 +142,20 @@ def render_html_report(
     )
     flags_html = f"<h2>偵測到的警訊</h2><ul>{flags}</ul>" if flags else ""
 
+    # 未涵蓋成本 / 模型限制:HTML 是「分享出去」的載體,誠實警語
+    # 不能只留在終端 —— 文字報告有、HTML 沒有 = 兩個通道誠實度不一致。
+    from .markets import uncovered_cost_warnings as _ucw
+
+    _cost_notes: list[str] = []
+    for _mkt in sorted({t.market for t in result.log.trades}, key=lambda m: m.value):
+        for _w in _ucw(_mkt):
+            if _w not in _cost_notes:
+                _cost_notes.append(_w)
+    cost_html = (
+        "<h2>本工具未涵蓋的成本 / 模型限制</h2><ul>"
+        + "".join(f"<li>{h(w)}</li>" for w in _cost_notes) + "</ul>"
+    ) if _cost_notes else ""
+
     # --full 選配區塊:時間趨勢(沿用 reliability 三態,不足的桶誠實不判讀)。
     # 標題跟著 granularity 走:紀錄跨 24 個月以上 analyze_trend 會自動改季度,
     # 把季度表硬標成「月報」是張冠李戴。
@@ -269,6 +283,7 @@ color:#6b7280;font-size:12px}}
 {oos_html}
 {trend_html}
 {scenario_html}
+{cost_html}
 
 <div class="disclaimer">
 本報告為統計分析工具的輸出,僅供教育與研究用途,<b>不構成任何投資建議</b>。<br>

@@ -386,11 +386,16 @@ def run():
     n_fills = 0
     chart_symbol = symbols[-1] if symbols else ""   # 圖表以最後一檔為例
 
-    for symbol in symbols:
-        history = load_history(symbol)
-        if symbol == chart_symbol:
-            candles_for_chart = history
-        for i in range(len(history)):
+    # 時間為外圈、標的為內圈。若按標的逐檔跑完整段歷史,前面標的的
+    # 期末損益會被灌進後面標的的「歷史」權益曲線(時間穿越),圖會說謊。
+    histories = {{sym: load_history(sym) for sym in symbols}}
+    n_bars = min((len(h) for h in histories.values()), default=0)
+    if chart_symbol:
+        candles_for_chart = histories[chart_symbol][:n_bars]
+
+    for i in range(n_bars):
+        for symbol in symbols:
+            history = histories[symbol]
             window = history[: i + 1]
             bar = window[-1]
             # 紙上模擬需要餵價
@@ -423,11 +428,11 @@ def run():
                     all_markers.append({{"time": bar["time"], "price": bar["high"],
                                          "side": "sell", "text": sig.reason or "賣"}})
 
-            # 權益只在圖表主標的那一輪取樣:多標的時每輪 K 棒時間軸會重疊,
-            # 全部 append 會讓權益曲線時間回捲、第一檔的歷史被覆蓋(圖會畫錯)
-            if symbol == chart_symbol:
-                equity_curve.append({{"time": bar["time"],
-                                      "value": broker.get_account().equity}})
+        # 每個時間點取樣一次「帳戶總權益」(時間軸對齊圖表主標的)——
+        # 在內圈取樣會把同一時間戳寫入多次,或漏掉其他標的的損益貢獻
+        if chart_symbol:
+            equity_curve.append({{"time": histories[chart_symbol][i]["time"],
+                                  "value": broker.get_account().equity}})
 
     acct = broker.get_account()
     print("=" * 50)

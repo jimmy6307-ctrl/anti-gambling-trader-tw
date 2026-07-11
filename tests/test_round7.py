@@ -173,6 +173,90 @@ def test_report_discloses_uncovered_costs():
     assert "資金費率" in result.text_report
 
 
+# ── 第 7 輪複核(兩模型驗收)確認問題的回歸 ─────────────────────────
+
+
+def test_coin_quoted_pairs_still_crypto():
+    """幣幣對(ETHBTC/SOLBTC)不得因裸幣修復而變成 crypto 假陰性。"""
+    for s in ("ETHBTC", "SOLBTC", "BNBBTC", "ETH-BTC", "SOL_USDT"):
+        assert infer_market(s) == Market.CRYPTO, s
+    # 修復不得重新引入前綴劫持
+    assert infer_market("ETHA") == Market.US_STOCK
+    assert infer_market("SOLAR") == Market.US_STOCK
+
+
+def test_industry_group_tag_not_scam():
+    """「產業群組輪動」是正常策略標籤,「群組」泛詞不得觸發詐騙警語。"""
+    from core.antiscam.signals import scam_warnings_for
+    from core.metrics.performance import compute_metrics
+    from core.strategy.profiler import profile_strategy
+
+    log = _mk_log(["產業群組輪動"] * 12, [-100] * 12)
+    warns = scam_warnings_for(compute_metrics(log), profile_strategy(log))
+    assert not any("假飆股群" in w for w in warns), f"產業群組被誤判:{warns}"
+
+
+def test_scaffold_symbols_sentinel_removed():
+    """--symbols 預設必須是 None:明確輸入 AAPL 的人不得被當成沒指定。"""
+    from core.cli import _build_parser
+
+    parser = _build_parser()
+    a1 = parser.parse_args(["scaffold", "--name", "x"])
+    assert a1.symbols is None, "未指定時應為 None(不是哨兵字串 AAPL)"
+    a2 = parser.parse_args(["scaffold", "--name", "x", "--symbols", "AAPL"])
+    assert a2.symbols == "AAPL"
+
+
+def test_scaffold_main_template_time_outer_loop():
+    """模板主迴圈必須時間外圈:逐檔跑完整段歷史會讓權益曲線時間穿越。"""
+    from core.charts.registry import get_chart_lib
+    from core.scaffold.generator import ScaffoldOptions
+    from core.scaffold.templates import main_py
+
+    src = main_py(ScaffoldOptions(project_name="t", symbols=["AAA", "BBB"]),
+                  get_chart_lib("lightweight"), None, False)
+    assert "for i in range(n_bars):" in src, "應為時間外圈"
+    assert "histories = {" in src
+    assert "getattr(broker, 'name'" in src, "摘要應用實際 broker 名稱"
+    compile(src, "<scaffold-main>", "exec")
+
+
+def test_scaffold_templates_no_stale_broker_hints():
+    """config 券商註解動態化;broker_setup 不得硬給 (api_key, api_secret) 呼叫。"""
+    from core.broker import BROKER_TEMPLATES
+    from core.scaffold.templates import _broker_keys_comment, broker_setup_py, config_yaml
+    from core.scaffold.generator import ScaffoldOptions
+
+    comment = _broker_keys_comment()
+    for key in BROKER_TEMPLATES:
+        assert key in comment, f"動態清單缺 {key}"
+    opts = ScaffoldOptions(project_name="t", symbols=["AAPL"], broker="ibkr")
+    setup_src = broker_setup_py(opts, BROKER_TEMPLATES["ibkr"])
+    assert 'creds["api_key"], creds["api_secret"])' not in setup_src, \
+        "IBKR 建構子是 host/port/client_id,不得硬給金鑰簽名範例"
+
+
+def test_chart_docstrings_honest_about_cdn():
+    """CDN 圖表庫不得自稱「自包含」(離線不渲染)。"""
+    from core.charts.registry import get_chart_lib
+
+    for key in ("lightweight", "echarts"):
+        assert "自包含" not in get_chart_lib(key).module_code, key
+
+
+def test_html_report_discloses_uncovered_costs():
+    """HTML 報告也要有未涵蓋成本警語 —— 分享出去的通道不能比終端不誠實。"""
+    from core.analyzer import analyze_file
+    from core.cli import _example_path
+    from core.report_html import render_html_report
+
+    path, market = _example_path("crypto")
+    result = analyze_file(path, market_hint=market, n_bootstrap=500)
+    html = render_html_report(result)
+    assert "未涵蓋的成本" in html
+    assert "資金費率" in html
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
