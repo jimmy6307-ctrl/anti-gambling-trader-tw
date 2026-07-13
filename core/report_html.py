@@ -1,4 +1,4 @@
-"""HTML 報告 + 分享圖卡 — 把分析結果變成可存檔、可傳給家人的鐵證。
+"""HTML 報告 + 分享圖卡 — 把分析結果變成可存檔、可傳給家人的白紙黑字數據。
 
 用途:勸阻長輩跟單時,甩一張數據卡片比講一百句話有用。
 
@@ -96,7 +96,7 @@ def render_html_report(
     """把 AnalysisResult 渲染成自包含 HTML。純 passthrough,不新增任何結論。
 
     trend / scenario 為 --full 健檢時的選配區塊(TrendReport / RuinScenario);
-    預設 None 保持精簡 —— HTML 報告的定位是「傳給家人的鐵證」,不稀釋裁決。
+    預設 None 保持精簡 —— HTML 報告的定位是「傳給家人的白紙黑字數據」,不稀釋裁決。
     scenario_note:--full 但模擬被略過時的原因,會渲染成明確的「已略過」區塊;
     終端說了「略過」而 HTML 靜默消失 = 兩個通道誠實度不一致,禁止。
     """
@@ -296,7 +296,7 @@ color:#6b7280;font-size:12px}}
 
 
 def render_share_card(result, *, width: int = 600) -> str:
-    """分享圖卡:一張可截圖傳給家人的鐵證卡片。"""
+    """分享圖卡:一張可截圖傳給家人的數據卡片。"""
     v = result.verdict
     m = result.metrics
     color = _verdict_color(v.level.value)

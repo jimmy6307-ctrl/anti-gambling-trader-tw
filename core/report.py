@@ -131,7 +131,7 @@ def render_text_report(
         )
         L.append("")
 
-    # ── 跟單 / 聽明牌的成績單(反詐實用化:用你自己的錢證明跟單必賠)──
+    # ── 跟單 / 聽明牌的成績單(反詐實用化:用你自己的數字檢驗跟單績效)──
     if follow_guru is not None:
         L.append("【🎯 跟單 / 聽明牌的成績單】")
         L.append(f"  {follow_guru.message}")

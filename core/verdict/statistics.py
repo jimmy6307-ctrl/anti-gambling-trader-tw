@@ -40,7 +40,8 @@ class SignificanceResult:
     std: float                   # 樣本標準差
     t_stat: float                # t 統計量
     p_value_t: float             # t 檢定的單尾 p 值(H0: mean <= 0)
-    p_value_bootstrap: float     # bootstrap 下平均值 <= 0 的比例
+    p_value_bootstrap: float     # H0(期望=0)置中重抽下,平均值 >= 觀察值的比例
+                                 # (單尾 p 值;不是「期望不為正的機率」)
     ci_low: float                # 平均值的 95% 信賴區間下界(bootstrap)
     ci_high: float               # 上界
     is_significant: bool         # 在 α=0.05 下是否顯著為正
@@ -174,17 +175,26 @@ def test_expectancy_positive(
 
     # ── Bootstrap ──
     # 用 random.choices 一次抽整批(CPython C 實作):實測比逐一 randrange
-    # 快約 4.6 倍。分布完全相同(均勻、有放回),同 seed 仍可重現;
-    # 僅抽樣序列與舊版不同,統計上等價。
+    # 快約 4.6 倍。分布完全相同(均勻、有放回),同 seed 仍可重現。
+    #
+    # p 值語意(第 9 輪外部審查修正):假設檢定的 p 值必須在「虛無假設
+    # 成立的世界」裡重抽 —— 把樣本平移成均值 0(shift method,教科書標準),
+    # 再問「純靠抽樣波動,平均值至少跟觀察值一樣高的機率」。
+    # 舊版直接對原始樣本重抽、數「平均 <= 0 的比例」:那是信賴區間的
+    # 反推(percentile CI inversion),對偏態的損益分布會偏,
+    # 而且曾被解釋成「期望其實不為正的機率」—— 那是後驗機率的語氣,
+    # 頻率學派的 p 值不能那樣講。CI 本身維持 percentile 法(語意正確)。
     rng = random.Random(seed)
-    boot_means: list[float] = []
+    shifted = [p - mean for p in pnls]  # 虛無假設:真實期望 = 0
+    boot_means: list[float] = []        # 供 CI:重抽均值 = H0 重抽均值 + mean
+    n_ge_obs = 0
     for _ in range(n_bootstrap):
-        boot_means.append(sum(rng.choices(pnls, k=n)) / n)
+        bm0 = sum(rng.choices(shifted, k=n)) / n   # H0 世界的平均
+        if bm0 >= mean:
+            n_ge_obs += 1
+        boot_means.append(bm0 + mean)
     boot_means.sort()
-
-    # 平均值 <= 0 的比例 ≈ 「期望其實不為正」的經驗機率
-    n_le_zero = sum(1 for bm in boot_means if bm <= 0)
-    p_boot = n_le_zero / n_bootstrap
+    p_boot = n_ge_obs / n_bootstrap
 
     lo_idx = int((alpha / 2) * n_bootstrap)
     hi_idx = min(int((1 - alpha / 2) * n_bootstrap), n_bootstrap - 1)

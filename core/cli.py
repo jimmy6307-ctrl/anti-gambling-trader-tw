@@ -271,7 +271,7 @@ def _build_parser() -> argparse.ArgumentParser:
     a.add_argument("--strategy", metavar="PATH", help="把策略骨架寫成 .py 檔")
     a.add_argument("--html", metavar="PATH", help="輸出自包含的 HTML 報告(可存檔分享)")
     a.add_argument(
-        "--card", metavar="PATH", help="輸出分享圖卡 HTML(截圖傳給家人的鐵證)"
+        "--card", metavar="PATH", help="輸出分享圖卡 HTML(截圖傳給家人的數據卡)"
     )
     a.add_argument(
         "--full", action="store_true",

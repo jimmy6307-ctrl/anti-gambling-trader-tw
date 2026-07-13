@@ -1,8 +1,22 @@
 # 反詐投資王（Anti-Gambling Trader）
 
-> 一個**誠實到不討喜**的交易績效分析工具。
-> 它不會告訴你「你會賺錢」，而是用統計學告訴你：
-> 你過去的獲利，究竟是**可重複的優勢（edge）**，還是**運氣 + 倖存者偏差（賭博）**。
+**你在懷疑「投資群組是不是詐騙」「老師帶單可不可信」「我的交易到底是實力還是運氣」嗎？**
+這是一個免費開源的統計工具：把交易紀錄（台股／美股／加密貨幣）丟進來，
+它用期望值、顯著性檢定與樣本外驗證誠實告訴你 —— 你的獲利是**可重複的優勢**，
+還是**運氣＋倖存者偏差（賭博）**；並內建詐騙話術掃描、假績效鑑識與假老師檢驗。
+資料全程在你自己的電腦上分析，不上傳任何伺服器。
+
+> 一個**誠實到不討喜**的工具。它不會告訴你「你會賺錢」——
+> 不適合長期投資的，它會直接勸退你。
+> 👉 急著找答案？先看 **[常見問題 FAQ](docs/faq.md)**：投資群組是詐騙嗎、
+> 勝率 90% 可信嗎、出金要先繳稅正常嗎、被騙了怎麼辦。
+
+**English TL;DR** — An honest, open-source (MIT) trading-performance analyzer for
+Taiwan/US stocks and crypto. It uses expectancy, significance tests (t-test +
+centered bootstrap) and out-of-sample validation to tell whether your P&L is a
+repeatable edge or survivorship-biased luck — and it will actively discourage you
+if it's the latter. Includes scam-language scanning, fake-performance forensics
+and a guru-claim probability checker. Pure Python stdlib, all analysis stays local.
 
 ## 👶 完全沒用過電腦命令？從這裡開始
 
@@ -14,7 +28,7 @@
 ## 🛡 這個工具的反詐使命
 
 台灣到處都是**假飆股群、假二群、假 VIP 群、假名師、假績效截圖、保證獲利話術、
-詐騙幣與假投資平台**。它們全都靠同一招：用**倖存者偏差**與**精選截圖**，
+詐騙幣與假投資平台**。它們絕大多數靠同一招：用**倖存者偏差**與**精選截圖**，
 讓你誤以為有穩賺的捷徑。
 
 這個工具叫「反詐投資王」不是叫假的 —— 它存在的真正原因，就是**用統計與數學
@@ -30,14 +44,20 @@ anti-gambling-trader guru-check --win-rate 0.9 --trades 10 --monthly-return 0.2
 # 用數學算出「連贏10次的神人」有多容易靠運氣出現
 anti-gambling-trader survivorship
 
-# 鑑識老師/平台宣稱的報酬序列是否有可疑徵兆（過度平滑、不可能的夏普）
+# 鑑識老師/平台宣稱的報酬序列是否有可疑徵兆（過度平滑、高得可疑的夏普）
 anti-gambling-trader forensics --file 老師的月報酬.txt
 
 # 互動式自我檢測
 anti-gambling-trader scam-check
 ```
 
-詳見 **[反詐指南 docs/anti-scam.md](docs/anti-scam.md)**。
+詳見 **[反詐指南 docs/anti-scam.md](docs/anti-scam.md)** 與 **[FAQ](docs/faq.md)**。
+
+> 🆘 **懷疑自己正在被詐騙？** 立刻停止匯款，撥打 **165 反詐騙專線**，
+> 或上 [165 全民防騙網](https://165.npa.gov.tw)。查證合法業者：
+> [金管會證期局](https://www.sfb.gov.tw)；證券期貨爭議求助：
+> [投保中心](https://www.sfipc.org.tw)。（官方連結查核日期：2026-07）
+> 本工具是統計輔助，**不是司法鑑定**；官方管道永遠優先。
 
 ---
 
@@ -51,10 +71,10 @@ anti-gambling-trader scam-check
   （刻意不對個別策略做優勢認證 —— 多重比較未校正會把運氣誤認成優勢，詳見方法論）
 - **反事實分析**：算出「停掉最差那一招，整體會變怎樣」
 - **轉正數字**：告訴你「勝率要到幾 % / 盈虧比要拉到多少，期望值才會轉正」
-- **反詐偵測**：把「聽老師 / 跟單」的交易單獨抽出算期望值，用你自己的錢證明跟單必賠
+- **反詐偵測**：把「聽老師 / 跟單」的交易單獨抽出算期望值 —— 用你自己的數字檢驗跟單到底賺不賺
 - **風險情境模擬**：用你的損益分布模擬未來，看有多少比例的路徑會爆倉
 - **時間趨勢**：月報、優勢衰減偵測（「你最近三個月期望值轉負」）
-- **HTML 報告 + 分享圖卡**：可存檔、可截圖傳給家人的鐵證
+- **HTML 報告 + 分享圖卡**：可存檔、可截圖傳給家人的白紙黑字數據
 - 反推你的交易邏輯，產生 **可回測的策略骨架**（backtrader / vectorbt / 通用）
 - 若判定**不適合長期投資，明確勸退**
 
@@ -132,7 +152,7 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 | 等級 | 意義 | 勸退 |
 |------|------|------|
-| 🟥 `gambling` | 期望值為負，數學上注定長期虧損 | ✅ 強烈勸退 |
+| 🟥 `gambling` | 樣本期望值為負 —— 方法不變，長期的統計預期就是虧損 | ✅ 強烈勸退 |
 | 🟧 `insufficient` | 樣本太少，無法區分本事與運氣 | ✅ 勸阻重押 |
 | 🟨 `luck_suspected` | 帳面賺錢，但統計上像運氣 | ✅ 高度存疑 |
 | 🟨 `fragile_edge` | 有統計訊號但結構脆弱、風險高 | ✅ 謹慎 |
@@ -140,7 +160,8 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 ## 它如何分辨「優勢」與「賭博」
 
-1. **期望值**：每筆平均賺/賠多少。**負期望 = 賭博，沒有例外。**
+1. **期望值**：每筆平均賺/賠多少。**真實期望值為負，長期就是輸（數學定義）；**
+   **樣本期望值為負則「先當賭博處理」（保守原則）—— 它是估計，所以裁決同時附不確定性檢定。**
 2. **顯著性檢定**：t 檢定 + Bootstrap 重抽，雙雙 p < 0.05 才算「不是運氣」。偏保守。
 3. **樣本外驗證**：交易依時間單一切點切成前段（約 70%，樣本內）與後段（約 30%，樣本外），前段的優勢在後段若消失 → 過度配適 / 倖存者偏差。
 4. **賭博特徵掃描**：負期望、單筆暴賺撐場、賺小賠大、極端回撤、長連虧、純當沖…
@@ -225,7 +246,7 @@ core/
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 11 個測試檔，200 個測試
+tests/                 # 12 個測試檔，206 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -255,6 +276,12 @@ python tests/test_round8.py
 ## 作者
 
 好棒棒反詐協會 - 免費顧問 阿軒割割
+
+> 誠實聲明：上列署名為社群化名，「好棒棒反詐協會」**不是**立案法人或
+> 官方組織。本專案的可信度不來自頭銜，來自：公開的原始碼、可重現的
+> 實驗（`experiments/`，固定 seed）、[方法論全文](docs/methodology.md)與
+> 206 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
+> 做到的事。
 
 ## 授權
 

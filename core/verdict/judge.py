@@ -105,7 +105,7 @@ class Verdict:
 def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedFlag]:
     flags: list[RedFlag] = []
 
-    # 1. 負期望值:長期注定虧損,卻可能短期帳面為正(典型賭博)
+    # 1. 負期望值:長期統計預期為虧損,卻可能短期帳面為正(典型賭博)
     if m.expectancy < 0:
         flags.append(RedFlag(
             "negative_expectancy", "high",
@@ -264,6 +264,15 @@ def judge(
             f"{m.expectancy:+.2f}(已含成本)。正期望值是任何可持續策略的最低門檻,"
             "而你目前是負的。"
         )
+        # 誠實聲明:負的「樣本」期望值同樣有抽樣不確定性 —— 勸退是保守
+        # 原則(負值先停手),不是宣稱已在統計上證明你必輸。
+        if sig.ci_high > 0:
+            reasons.append(
+                f"註:平均損益的 95% 信賴區間為 [{sig.ci_low:.2f}, {sig.ci_high:.2f}],"
+                "上界仍在 0 以上 —— 負期望的估計也有不確定性。"
+                "勸退依據的是保守原則(期望值為負就先停手),"
+                "不是「統計上已證明你必輸」。"
+            )
         advice += [
             "立刻停止用真金白銀執行這套方法 — 它不是『還沒成功』,而是『方向錯誤』。",
             "若帳面曾經賺錢,那是運氣,不是本事;運氣會均值回歸。",

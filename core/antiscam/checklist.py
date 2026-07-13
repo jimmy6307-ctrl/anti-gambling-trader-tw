@@ -21,7 +21,7 @@ class CheckItem:
     weight: int              # 命中時的風險分數(高風險特徵權重高)
 
 
-# 檢測題庫:每題對應一種詐騙特徵。weight 越高代表越接近「鐵證」。
+# 檢測題庫:每題對應一種詐騙特徵。weight 越高 = 越重大的危險訊號。
 CHECK_ITEMS: list[CheckItem] = [
     CheckItem("pulled_in", "是否有人『主動』把你拉進投資 LINE / Telegram 群?",
               "fake_stock_group", 2),
@@ -78,7 +78,7 @@ def evaluate(answers: dict[str, bool]) -> ScamCheckResult:
     max_score = sum(it.weight for it in CHECK_ITEMS)
     score = 0
     hit_codes: set[str] = set()
-    # 任何一題權重 3(鐵證級)被命中,直接視為極高風險
+    # 任何一題權重 3(重大危險訊號)被命中,直接視為極高風險
     hard_hit = False
     for it in CHECK_ITEMS:
         if answers.get(it.key):
@@ -171,11 +171,11 @@ def run_scam_check(input_fn=input, output_fn=print) -> ScamCheckResult | None:
         1 for it in CHECK_ITEMS if answers.get(it.key) and it.weight >= 3
     )
     output_fn(f"  命中 {n_hit} / {len(CHECK_ITEMS)} 項詐騙特徵"
-              f"(其中鐵證級 {n_hard} 項)  風險等級:{result.risk_level}")
+              f"(其中重大危險訊號 {n_hard} 項)  風險等級:{result.risk_level}")
     # 可解釋性:等級是「特徵嚴重度加權」的結果,不是純命中數 ——
     # 否則使用者會困惑「同樣中 3 項,為什麼他是中、我是極高」。
     output_fn("  (風險等級依特徵嚴重度加權判定,非單純命中數;"
-              "任一鐵證級特徵命中即列為極高。)")
+              "任一重大危險訊號命中即列為極高。)")
     output_fn(f"  {result.headline}")
     output_fn("=" * 60)
     if result.advice:

@@ -46,7 +46,7 @@ _S2T = str.maketrans(
 _SENTENCE_DELIM = re.compile(r"[。!?!?\n；;]+")
 
 # ── 話術詞庫:(片語, 對應的詐騙型態代碼, 權重) ────────────────
-# 權重 3 = 近乎鐵證的詐騙用語;2 = 強烈可疑;1 = 需搭配其他訊號
+# 權重 3 = 重大危險訊號用語;2 = 強烈可疑;1 = 需搭配其他訊號
 _LEXICON: list[tuple[str, str, int]] = [
     # 保證獲利 / 高勝率話術
     ("保證獲利", "guaranteed_return", 3),
@@ -311,7 +311,7 @@ def scan_text(text: str) -> TextScanResult:
         )
     elif has_hard_evidence and distinct >= 2:
         level = "極高"
-        headline = "🚨 極高風險:出現多種典型詐騙話術,且含近乎鐵證的用語。"
+        headline = "🚨 極高風險:出現多種典型詐騙話術,且含重大危險訊號用語。"
     elif has_hard_evidence or distinct >= 3:
         level = "高"
         headline = "⚠️ 高風險:出現典型的投資詐騙話術。"
