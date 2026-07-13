@@ -50,7 +50,7 @@ anti-gambling-trader scam-check
 > 真的能穩定預測股市的人，會自己默默賺，不會免費拉你進群。
 
 把「老師」的歷史推薦**全部**記下來（含失敗的），用本工具算期望值 ——
-幾乎沒有例外，都是負的。
+絕大多數算出來是負的 —— 別用感覺，用工具拿自己的紀錄驗證。
 
 ---
 
@@ -143,7 +143,7 @@ anti-gambling-trader scam-check
 | 查合法證券／投顧業者 | [金管會證券期貨局](https://www.sfb.gov.tw) |
 | 證券期貨爭議、投資人保護 | [投保中心](https://www.sfipc.org.tw) |
 | 報案 | 110、[刑事警察局](https://cib.npa.gov.tw) |
-| 美股／海外業者查證 | [SEC Investor.gov](https://www.investor.gov)、[FINRA](https://www.finra.org) |
+| 美股／海外業者查證 | [SEC Investor.gov](https://www.investor.gov)、[FINRA BrokerCheck](https://brokercheck.finra.org) |
 
 > 本工具是統計輔助，不是司法鑑定 —— 工具說「低風險」不代表安全，
 > 官方管道的認定永遠優先。

@@ -28,12 +28,21 @@ BANNED = [
     "沒有例外。",
     "鐵證",
     "不可能的夏普",
+    # 第 9 輪複核追加(codex R9-05):機率語境裡的決定論詞
+    "必然出現", "一定會有人", "一定會出現",
+    "從來不存在",
+    "幾乎沒有例外",
+    "八成是雜訊",
+    "不可能長期持續",
 ]
 
 SCAN_TARGETS = (
     list(ROOT.glob("*.md"))
+    + list(ROOT.glob("*.txt"))          # llms.txt / requirements.txt
+    + list(ROOT.glob("*.cff"))
     + list((ROOT / "docs").glob("*.md"))
     + list((ROOT / ".claude").rglob("*.md"))
+    + list((ROOT / "experiments").glob("*.py"))
     + [p for p in (ROOT / "core").rglob("*.py")]
 )
 

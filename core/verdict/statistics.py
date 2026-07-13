@@ -3,10 +3,11 @@
 我們要回答的核心問題是:
 「這個策略的『平均每筆賺錢』,有沒有可能其實只是運氣?」
 
-用兩種互補的方法:
-1. t 檢定:在常態近似下,平均報酬顯著大於 0 的機率
-2. Bootstrap 重抽樣:不假設分布,直接從資料重抽,看「平均值 ≤ 0」的頻率
-   (這對交易資料特別重要,因為損益分布通常嚴重偏態、厚尾)
+用兩種互補的方法(兩者的 p 值語意相同:**假設你其實沒有優勢(H0)時,
+純靠抽樣波動出現至少這麼極端結果的機率** —— 不是「優勢為真的機率」):
+1. t 檢定:常態近似下的單尾尾端機率
+2. Bootstrap 重抽樣:把樣本平移到 H0(均值 0)後重抽,看「重抽平均 ≥ 觀察值」
+   的頻率(shift method;不假設分布,對偏態厚尾的損益特別重要)
 """
 
 from __future__ import annotations
@@ -194,7 +195,9 @@ def test_expectancy_positive(
             n_ge_obs += 1
         boot_means.append(bm0 + mean)
     boot_means.sort()
-    p_boot = n_ge_obs / n_bootstrap
+    # (n+1)/(B+1) 修正:蒙地卡羅 p 值不該印出「恰好 0」的假精準 ——
+    # 觀察值本身也算一次「至少一樣極端」的實現
+    p_boot = (n_ge_obs + 1) / (n_bootstrap + 1)
 
     lo_idx = int((alpha / 2) * n_bootstrap)
     hi_idx = min(int((1 - alpha / 2) * n_bootstrap), n_bootstrap - 1)
