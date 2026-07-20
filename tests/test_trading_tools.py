@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import types
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -27,6 +31,42 @@ from core.scaffold.generator import write_project  # noqa: E402
 from core.verdict.judge import judge  # noqa: E402
 from core.models import Market, Side, Trade, TradeLog  # noqa: E402
 from datetime import datetime  # noqa: E402
+
+
+def _execute_generated_main(opts: ScaffoldOptions) -> dict:
+    """執行產出的 main.py,回傳命名空間供 runtime 安全閘測試。"""
+    main_src = next(
+        f.content for f in generate_project(opts) if f.relpath == "main.py"
+    )
+    modules = {
+        "strategy": types.ModuleType("strategy"),
+        "broker_setup": types.ModuleType("broker_setup"),
+        "data_feed": types.ModuleType("data_feed"),
+        "charting": types.ModuleType("charting"),
+        "broker_lib": types.ModuleType("broker_lib"),
+    }
+    modules["strategy"].Strategy = object
+    modules["broker_setup"].build_broker = lambda config: None
+    modules["data_feed"].load_history = lambda symbol: []
+    modules["charting"].render = lambda *args, **kwargs: None
+    modules["broker_lib"].Order = object
+    modules["broker_lib"].OrderSide = object
+    modules["broker_lib"].BrokerAdapter = object
+
+    namespace = {"__name__": "generated_scaffold_main"}
+    with patch.dict(sys.modules, modules):
+        exec(compile(main_src, "generated/main.py", "exec"), namespace)
+    return namespace
+
+
+class _LiveBrokerProbe:
+    is_live = True
+
+    def __init__(self) -> None:
+        self.confirmed_with = None
+
+    def confirm_live_trading(self, *, i_understand_the_risk: bool = False) -> None:
+        self.confirmed_with = i_understand_the_risk
 
 
 # ── PaperBroker ──────────────────────────────────────────────
@@ -273,6 +313,95 @@ def test_scaffold_live_flag_requires_complete_tiny_live_stage():
         if f.relpath == "config.example.yaml"
     )
     assert "allow_live_trading: true" in config.content
+
+
+def test_generated_live_runtime_requires_all_stage_safety_gates():
+    """產出的 runtime 必須實際攔截缺欄位、錯型別與非允許階段。"""
+    namespace = _execute_generated_main(ScaffoldOptions(project_name="runtime-gate"))
+    maybe_enable_live = namespace["maybe_enable_live"]
+    valid = {
+        "risk": {"i_have_read_disclaimer": True},
+        "anti_gambling": {
+            "allow_live_trading": True,
+            "stage_code": "tiny_live_validation",
+        },
+    }
+
+    # 舊總開關仍是獨立閘門；其餘設定全正確也不能繞過。
+    broker = _LiveBrokerProbe()
+    with pytest.raises(SystemExit, match="ALLOW_LIVE_TRADING"):
+        maybe_enable_live(broker, valid)
+    assert broker.confirmed_with is None
+
+    namespace["ALLOW_LIVE_TRADING"] = True
+    blocked_configs = [
+        None,
+        {
+            "risk": {"i_have_read_disclaimer": False},
+            "anti_gambling": valid["anti_gambling"],
+        },
+        {"risk": {"i_have_read_disclaimer": True}},
+        {
+            "risk": {"i_have_read_disclaimer": True},
+            "anti_gambling": "not-a-mapping",
+        },
+        {
+            "risk": {"i_have_read_disclaimer": True},
+            "anti_gambling": {
+                "allow_live_trading": False,
+                "stage_code": "tiny_live_validation",
+            },
+        },
+        {
+            "risk": {"i_have_read_disclaimer": True},
+            "anti_gambling": {
+                "allow_live_trading": "true",
+                "stage_code": "tiny_live_validation",
+            },
+        },
+        {
+            "risk": {"i_have_read_disclaimer": True},
+            "anti_gambling": {"allow_live_trading": True},
+        },
+        {
+            "risk": {"i_have_read_disclaimer": True},
+            "anti_gambling": {
+                "allow_live_trading": True,
+                "stage_code": "paper_until_oos",
+            },
+        },
+    ]
+    for config in blocked_configs:
+        broker = _LiveBrokerProbe()
+        with pytest.raises(SystemExit):
+            maybe_enable_live(broker, config)
+        assert broker.confirmed_with is None
+
+    broker = _LiveBrokerProbe()
+    maybe_enable_live(broker, valid)
+    assert broker.confirmed_with is True
+
+
+def test_generated_live_runtime_yaml_parse_failure_is_fail_closed(tmp_path):
+    """破損 YAML 要退回禁止 live 的安全預設,不能留下半解析設定。"""
+    namespace = _execute_generated_main(ScaffoldOptions(project_name="parse-gate"))
+    config_path = tmp_path / "broken-config.yaml"
+    config_path.write_text(
+        "anti_gambling: [this is not valid YAML",
+        encoding="utf-8",
+    )
+
+    config = namespace["load_config"](str(config_path))
+    assert config["anti_gambling"] == {
+        "stage_code": "unverified",
+        "allow_live_trading": False,
+    }
+
+    namespace["ALLOW_LIVE_TRADING"] = True
+    broker = _LiveBrokerProbe()
+    with pytest.raises(SystemExit):
+        namespace["maybe_enable_live"](broker, config)
+    assert broker.confirmed_with is None
 
 
 def test_scaffold_writes_runnable_project():

@@ -359,6 +359,11 @@ DEFAULT_CONFIG = {{
     "paper": {{"starting_cash": 1_000_000, "fee_rate": 0.001}},
     "risk": {{"stop_loss_pct": 0.05, "take_profit_pct": 0.15,
               "max_position_pct": 0.2}},
+    # 缺少設定檔或解析失敗時,明確退回未驗證且禁止真實下單。
+    "anti_gambling": {{
+        "stage_code": "unverified",
+        "allow_live_trading": False,
+    }},
 }}
 
 
@@ -366,8 +371,16 @@ def load_config(path: str = "config.yaml") -> dict:
     if not os.path.exists(path):
         # 沒有 config.yaml 時用內建預設(紙上模擬)
         return dict(DEFAULT_CONFIG)
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as exc:
+        # 設定無法讀取或 YAML 解析失敗時絕不猜測,退回安全預設。
+        print(
+            f"⛔ {{path}} 無法安全解析({{type(exc).__name__}}),"
+            "改用禁止真實下單的內建預設。"
+        )
+        return dict(DEFAULT_CONFIG)
     # 空檔或格式錯誤時 safe_load 回 None / 非 dict —— 直接用會 AttributeError。
     # 誠實退回內建預設(紙上模擬)並提醒,而不是丟 traceback。
     if not isinstance(data, dict):
@@ -379,10 +392,13 @@ def load_config(path: str = "config.yaml") -> dict:
 def maybe_enable_live(broker: BrokerAdapter, config: dict) -> None:
     """若使用者明確開啟真實下單,解除安全閘門;否則維持封鎖。
 
-    兩道彼此獨立的閘門都通過才會放行:
+    所有彼此獨立的閘門都通過才會放行:
       1. main.py 的 ALLOW_LIVE_TRADING 常數(要手動改成 True)
       2. config.yaml 的 risk.i_have_read_disclaimer 設為 true
-    這樣「改一個常數」無法單獨解鎖,逼你在兩個不同地方都明確表態。
+      3. anti_gambling.allow_live_trading 必須是布林值 true
+      4. anti_gambling.stage_code 必須精確等於 tiny_live_validation
+      5. 券商本身的 confirm_live_trading 雙重確認
+    缺欄位、型別不符或其他階段一律 fail closed。
     """
     if not getattr(broker, "is_live", False):
         return  # 紙上模擬,無需解鎖
@@ -394,12 +410,34 @@ def maybe_enable_live(broker: BrokerAdapter, config: dict) -> None:
             "   再把 main.py 的 ALLOW_LIVE_TRADING 改成 True。"
         )
 
-    if not config.get("risk", {{}}).get("i_have_read_disclaimer", False):
+    risk = config.get("risk") if isinstance(config, dict) else None
+    if not isinstance(risk, dict) or risk.get("i_have_read_disclaimer") is not True:
         raise SystemExit(
             "⛔ 真實下單的第二道閘門未解除。\\n"
             "   請先閱讀免責聲明,並在 config.yaml 的 risk 區塊加上:\\n"
             "       i_have_read_disclaimer: true\\n"
             "   兩道閘門刻意分開,確保你不是只改了一個地方就誤觸真錢下單。"
+        )
+
+    anti_gambling = config.get("anti_gambling")
+    if not isinstance(anti_gambling, dict):
+        raise SystemExit(
+            "⛔ 缺少有效的 anti_gambling 安全設定,真實下單維持封鎖。\\n"
+            "   請重新執行含完整交易分析的 scaffold,不要手動猜測階段。"
+        )
+
+    if anti_gambling.get("allow_live_trading") is not True:
+        raise SystemExit(
+            "⛔ 交易分析尚未允許真實下單。\\n"
+            "   anti_gambling.allow_live_trading 必須是布林值 true;"
+            "缺少、false 或字串值一律封鎖。"
+        )
+
+    if anti_gambling.get("stage_code") != "tiny_live_validation":
+        raise SystemExit(
+            "⛔ 目前交易階段不允許真實下單。\\n"
+            "   只有 stage_code: tiny_live_validation 才可能放行;"
+            "缺少或其他階段一律維持紙上模擬。"
         )
 
     broker.confirm_live_trading(i_understand_the_risk=True)

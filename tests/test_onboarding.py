@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
 import tempfile
-import json
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +28,25 @@ from core.onboarding import (  # noqa: E402
     prompt_beginner_row,
     stage_from_analysis,
 )
+
+
+def _capture_cli(argv: list[str], *, stdin_text: str | None = None):
+    """同時支援一般回傳與 argparse 的 SystemExit，供 CLI 契約測試。"""
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    original_stdin = sys.stdin
+    if stdin_text is not None:
+        sys.stdin = io.StringIO(stdin_text)
+    try:
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                code = main(argv)
+            except SystemExit as exc:
+                code = int(exc.code)
+    finally:
+        sys.stdin = original_stdin
+    return code, stdout.getvalue(), stderr.getvalue()
 
 
 def _result(*, n=30, expectancy=10.0, discourage=False, persisted=False):
@@ -751,6 +772,55 @@ def test_cli_scan_screenshot_from_ocr_text_writes_review_json():
         assert "不是 OCR 正確率" in payload["confidence_notice"]
         assert payload["needs_manual_review"] is True
         assert payload["requires_human_review"] is True
+
+
+def test_cli_record_pnl_help_requires_explicit_currency():
+    code, stdout, stderr = _capture_cli(["record", "--help"])
+    assert code == 0
+    assert stderr == ""
+    assert "必須在數值內帶幣別" in stdout
+    assert "--currency" in stdout
+
+
+def test_cli_scan_screenshot_requires_exactly_one_source():
+    invalid_argv = (
+        ["scan-screenshot"],
+        ["scan-screenshot", "trade.png", "--text", "OCR 文字"],
+        ["scan-screenshot", "trade.png", "--text-file", "ocr.txt"],
+        ["scan-screenshot", "--text-file", "ocr.txt", "--text", "OCR 文字"],
+    )
+    for argv in invalid_argv:
+        code, _stdout, stderr = _capture_cli(argv)
+        assert code == 2
+        assert "必須且只能提供一個來源" in stderr
+        assert "IMAGE、--text-file PATH 或 --text TEXT" in stderr
+
+    code, stdout, stderr = _capture_cli(["scan-screenshot", "--help"])
+    assert code == 0
+    assert stderr == ""
+    assert "輸入來源三選一" in stdout
+    assert "必須只提供一個" in stdout
+
+
+def test_cli_scan_text_rejects_conflicting_sources_and_keeps_stdin():
+    code, _stdout, stderr = _capture_cli(
+        ["scan-text", "直接文字", "--file", "chat.txt"]
+    )
+    assert code == 2
+    assert "文字參數與 --file 不可同時使用" in stderr
+
+    code, stdout, stderr = _capture_cli(["scan-text", "--help"])
+    assert code == 0
+    assert stderr == ""
+    assert "直接文字與 --file 不可同時使用" in stdout
+    assert "stdin" in stdout
+
+    code, stdout, stderr = _capture_cli(
+        ["scan-text"], stdin_text="今天只是一般風險教育與投資紀錄討論。"
+    )
+    assert code == 0
+    assert stderr == ""
+    assert stdout
 
 
 if __name__ == "__main__":

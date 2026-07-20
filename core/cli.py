@@ -18,6 +18,34 @@ from .analyzer import analyze_file, sanitize_json
 from .models import Market
 
 
+class _ContractArgumentParser(argparse.ArgumentParser):
+    """在 argparse 階段拒絕會造成來源優先序不明的 CLI 組合。"""
+
+    def parse_args(self, args=None, namespace=None):
+        parsed = super().parse_args(args, namespace)
+        if getattr(parsed, "command", None) == "scan-screenshot":
+            supplied = (
+                bool(parsed.image),
+                bool(parsed.text_file),
+                parsed.text is not None,
+            )
+            if sum(supplied) != 1:
+                self.error(
+                    "scan-screenshot 必須且只能提供一個來源："
+                    "IMAGE、--text-file PATH 或 --text TEXT"
+                )
+        if (
+            getattr(parsed, "command", None) == "scan-text"
+            and parsed.text is not None
+            and parsed.file is not None
+        ):
+            self.error(
+                "scan-text 的文字參數與 --file 不可同時使用；"
+                "請擇一，或兩者都省略以讀取 stdin"
+            )
+        return parsed
+
+
 def _force_utf8_stdout() -> None:
     """確保中文在各平台終端機正確進出(尤其 Windows cp950)。
 
@@ -492,7 +520,7 @@ def _cmd_scan_screenshot(args) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    p = _ContractArgumentParser(
         prog="anti-gambling-trader",
         description="反詐投資王 — 用統計學判斷你的交易是優勢還是賭博",
     )
@@ -619,7 +647,10 @@ def _build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--symbol", help="標的代號；省略時進入互動輸入")
     rec.add_argument(
         "--pnl",
-        help="同一帳戶幣別、已扣手續費/稅/滑價的已實現淨損益",
+        help=(
+            "已扣手續費/稅/滑價的已實現淨損益金額；必須在數值內帶幣別"
+            "（如 25 USD、-1250 TWD），或另外提供 --currency"
+        ),
     )
     rec.add_argument(
         "--side",
@@ -649,11 +680,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── scan-screenshot:圖片 OCR / OCR 文字的保守式欄位辨識 ──
     shot = sub.add_parser(
-        "scan-screenshot", help="辨識交易截圖的點位、數量、損益與技術文字線索"
+        "scan-screenshot",
+        help="辨識交易截圖的點位、數量、損益與技術文字線索",
+        description=(
+            "辨識交易截圖的點位、數量、損益與技術文字線索。"
+            "輸入來源三選一，且必須只提供一個：IMAGE、--text-file 或 --text。"
+        ),
     )
-    shot.add_argument("image", nargs="?", help="券商/圖表截圖路徑")
-    shot.add_argument("--text-file", help="已由手機或系統 OCR 匯出的文字檔")
-    shot.add_argument("--text", help="直接貼入 OCR 文字")
+    shot.add_argument(
+        "image", nargs="?", metavar="IMAGE", help="三選一：券商/圖表截圖路徑"
+    )
+    shot.add_argument("--text-file", help="三選一：已由手機或系統 OCR 匯出的文字檔")
+    shot.add_argument("--text", help="三選一：直接貼入 OCR 文字")
     shot.add_argument("--language", default="chi_tra+eng", help="Tesseract 語言")
     shot.add_argument(
         "--threshold", type=float, default=0.80,
@@ -663,10 +701,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── scan-text:詐騙話術文字偵測 ──
     st = sub.add_parser(
-        "scan-text", help="貼上群組對話 / 廣告文案,掃描詐騙話術特徵"
+        "scan-text",
+        help="貼上群組對話 / 廣告文案,掃描詐騙話術特徵",
+        description=(
+            "掃描群組對話或廣告文案。直接文字與 --file 不可同時使用；"
+            "兩者都省略時從 stdin 讀取。"
+        ),
     )
-    st.add_argument("text", nargs="?", help="要掃描的文字(省略則從標準輸入讀)")
-    st.add_argument("--file", metavar="PATH", help="從檔案讀取文字")
+    st.add_argument(
+        "text", nargs="?",
+        help="直接提供文字；不可與 --file 同時使用（省略則從 stdin 讀取）",
+    )
+    st.add_argument(
+        "--file", metavar="PATH",
+        help="從檔案讀取文字；不可與直接文字同時使用",
+    )
 
     # ── guru-check:假老師績效驗證器 ──
     gc = sub.add_parser(
