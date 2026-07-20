@@ -15,7 +15,7 @@ All analysis runs on your own computer; nothing is uploaded to any server.
 > "pay tax before withdrawal"? What to do if you have been scammed?
 
 **TL;DR** — An honest, open-source (MIT) trading-performance analyzer for
-Taiwan/US stocks and crypto. It uses expectancy, significance tests (t-test +
+Taiwan securities and derivatives, US stocks, crypto and forex. It uses expectancy, significance tests (t-test +
 centered bootstrap) and out-of-sample validation to tell whether your P&L is a
 repeatable edge or survivorship-biased luck — and it will actively discourage you
 if it's the latter. Includes scam-language scanning, fake-performance forensics
@@ -27,7 +27,7 @@ If you have never installed Python, opened a terminal, or used AI, read the
 **[beginner quickstart guide docs/quickstart.md](docs/quickstart.md)** (in Traditional Chinese) —
 it starts from "how to install Python and open a terminal", walks you through step by step in about 15 minutes,
 and starts with one command: `anti-gambling-trader start`. It routes you to a complete trade log,
-a four-step single-trade recorder, a trading screenshot, or a LINE chat export.
+a five-prompt single-trade recorder, a trading screenshot, or a LINE chat export.
 
 ## 🛡 This tool's anti-fraud mission
 
@@ -41,23 +41,25 @@ the real reason this tool exists is to **use statistics and mathematics to expos
 What scams fear most is you calmly putting their promises to a mathematical test.
 
 ```bash
-# 貼上群組對話，掃描詐騙話術（不給假百分比，只給風險等級）
+# Scan group messages for scam-language features (ordinal risk, never a fake percentage)
 anti-gambling-trader scan-text "老師帶單保證獲利，快加VIP客服"
 
-# 檢驗老師的宣稱：「勝率90%、月報酬20%」純靠運氣出現的機率是多少？
+# Test how unusual a claimed 90% win rate and 20% monthly return are under the null model
 anti-gambling-trader guru-check --win-rate 0.9 --trades 10 --monthly-return 0.2
 
-# 用數學算出「連贏10次的神人」有多容易靠運氣出現
+# Quantify how easily a ten-win "guru" can appear by survivorship alone
 anti-gambling-trader survivorship
 
-# 鑑識老師/平台宣稱的報酬序列是否有可疑徵兆（過度平滑、高得可疑的夏普）
+# Flag suspicious properties in a claimed return series (over-smoothing, implausible Sharpe)
 anti-gambling-trader forensics --file 老師的月報酬.txt
 
-# 互動式自我檢測
+# Run the interactive self-check
 anti-gambling-trader scam-check
 ```
 
-See the **[anti-scam guide docs/anti-scam.md](docs/anti-scam.md)** and the **[FAQ](docs/faq.md)** (both in Traditional Chinese).
+See the **[complete behavior and interpretation guide](docs/user-guide.md)**,
+the **[anti-scam guide](docs/anti-scam.md)** and the **[FAQ](docs/faq.md)**
+(all in Traditional Chinese).
 
 > 🆘 **Suspect you are being scammed right now?** Stop transferring money immediately, call the
 > **165 anti-fraud hotline**, or visit the [165 anti-fraud portal](https://165.npa.gov.tw).
@@ -82,7 +84,7 @@ Supports **Taiwan stocks / US stocks / crypto**, imports trade records from **CS
 - **Break-even numbers**: tells you "what win rate / payoff ratio you would need for expectancy to turn positive"
 - **Anti-fraud detection**: isolates the "guru-following / copy-trade" trades and computes their expectancy separately — testing with your own numbers whether following the calls actually pays
 - **Risk scenario simulation**: simulates future paths from your own P&L distribution to see what fraction of paths blow up the account
-- **Time trends**: monthly reports and edge-decay detection ("your expectancy turned negative in the last three months")
+- **Time trends**: monthly/quarterly descriptive summaries plus one fixed early-vs-recent edge-decay test
 - **LINE export scanning**: understands LINE headers and split messages while preserving speaker, time, evidence and reasons
 - **Screenshot review**: extracts trade points and technical-analysis text clues, but never auto-fills low-confidence OCR
 - **Beginner stage routing**: uses the full record to recommend stopping, paper trading, or at most tiny live validation
@@ -106,12 +108,12 @@ The core engine is **pure Python standard library, zero external dependencies**.
 ```bash
 git clone https://github.com/mars-tw/anti-gambling-trader-tw.git
 cd anti-gambling-trader-tw
-pip install -e .            # 安裝本體（之後可用 anti-gambling-trader 指令）
+pip install -e .            # install the package and CLI
 
-# 以下為可選依賴：
-# pip install openpyxl       # 只有要讀 Excel (.xlsx) 才需要
+# Optional dependencies:
+# pip install openpyxl       # only for Excel (.xlsx) input
 # pip install -e ".[screenshot]"  # image OCR; Tesseract + language data also required
-# pip install backtrader     # 只有要實際跑回測骨架才需要（或 vectorbt）
+# pip install backtrader     # only to run a backtrader skeleton (or install vectorbt)
 ```
 
 Requirements: Python 3.10+. Run all commands from the project root (the directory containing `core/`);
@@ -152,6 +154,13 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 After installing the package, every `python -m core.cli` above can be replaced with the shorter `anti-gambling-trader`.
 
+> Screenshot parsing produces review candidates and text clues; it never saves them as trades automatically.
+> OCR may misread a sign, decimal point, unit or direction, so compare every field with the original image.
+> One screenshot cannot establish performance or trading skill.
+
+For every workflow, decision threshold and review checklist, see the
+[complete behavior and interpretation guide](docs/user-guide.md) (Traditional Chinese).
+
 > If Chinese characters / emoji render incorrectly in a Windows terminal: in PowerShell run `$env:PYTHONUTF8=1` first, then run the command;
 > on macOS / Linux, prefix the command with `PYTHONUTF8=1`.
 
@@ -173,13 +182,23 @@ Column names are **auto-detected, in Chinese or English**. At minimum you need e
 | pnl_currency | 損益幣別 / 帳戶幣別 | Required for direct P&L; only price-derived P&L may use the instrument's native quote currency |
 | tag | 策略 / strategy / 進場理由 | Optional (strongly recommended) |
 
+### Fail-closed behavior for incomplete data
+
+- Missing, invalid or identical exit times never fall back to file-row order as a fake timeline.
+- Different or unknown P&L currencies are not added together; mixed timezone bases are not sorted.
+- Unknown contract multipliers, notional bases or entry bases disable return and drawdown percentages.
+- Ambiguous gross/net headers are not treated as net P&L without explicit confirmation.
+
+The monetary P&L may still be retained when trustworthy, while only the dependent metrics are disabled.
+See the [full fail-closed matrix](docs/user-guide.md#4-資料不完整時工具如何-fail-closed).
+
 > Headers such as `盈虧`, `已實現損益`, and `realized_pnl` do not prove whether the
 > amount is gross or net. Rename them to an explicitly net header, or confirm the
 > mapping with `--field pnl=your_column`. Gross headers such as `profit` are accepted
 > only when a trustworthy `total_fee` is present on the same row and can be deducted.
 
-> **Strongly consider filling in `tag` (strategy label)**: the tool computes win rates for each approach separately,
-> helping you see "which approach actually works and which one is just giving money away".
+> **Strongly consider filling in `tag` (strategy label)**: the tool presents descriptive statistics for each approach,
+> helping you find which one performed worse in this sample and deserves review. It does not certify any individual tag as an edge.
 
 ## The five verdict levels
 
@@ -196,7 +215,8 @@ Column names are **auto-detected, in Chinese or English**. At minimum you need e
 1. **Expectancy**: average win/loss per trade. **A negative *true* expectancy means a long-run loss in expectation (by mathematical definition);**
    **a negative *sample* expectancy is "treated as gambling until shown otherwise" (a conservative principle) — it is an estimate, so the verdict comes with uncertainty tests attached.**
 2. **Significance testing**: t-test + centered bootstrap (shift method) resampling; only when both give p < 0.05 does it count as "not luck". The p-value = "the probability of results this good arising by pure luck if there were no edge", not "the probability that an edge exists". Deliberately conservative.
-3. **Out-of-sample validation**: trades are split at a single chronological cut into an earlier segment (about 70%, in-sample) and a later segment (about 30%, out-of-sample); if the edge in the earlier segment disappears in the later one → overfitting / survivorship bias.
+3. **Out-of-sample validation**: one real-time cut is used, with at least ten trades on each side and no same-timestamp group split.
+   Both segments must have significant positive expectancy, later degradation must stay below 50%, and the rule must have been frozen before the later data was seen. Missing time, mixed timezones or incomparable currencies cause an explicit refusal instead of a guessed split.
 4. **Gambling-pattern scan**: negative expectancy, results propped up by one outsized win, small wins / large losses, extreme drawdowns, long losing streaks, pure day trading…
 
 ## Build your own trading program
@@ -205,18 +225,18 @@ Beyond the single-file strategy skeleton, this tool can also use an **interactiv
 to generate a complete, runnable personal trading-program project for you.
 
 ```bash
-# 1. 先挑圖表樣式（四種開源圖表庫並排預覽）
-python -m core.cli chart-preview          # 產生 chart_preview.html，用瀏覽器打開挑選
+# 1. Preview four open-source chart styles side by side
+python -m core.cli chart-preview          # creates chart_preview.html
 
-# 2. 看看有哪些券商 / 圖表可選
+# 2. List the available broker and chart templates
 python -m core.cli brokers
 python -m core.cli charts
 
-# 3. 產生專案（建議帶 --from-analysis 先驗證，把裁決嵌入專案）
+# 3. Generate a project; --from-analysis embeds the conservative stage result
 python -m core.cli scaffold --name my_bot --broker binance --chart lightweight \
     --market crypto --symbols "BTCUSDT,ETHUSDT" --from-analysis my_trades.csv
 
-# 4. 跑起來（預設紙上模擬，不碰真錢）
+# 4. Run it in paper mode by default
 cd my_bot && pip install -r requirements.txt && python main.py
 ```
 
@@ -248,11 +268,12 @@ cd my_bot && pip install -r requirements.txt && python main.py
 ### Three-layer safety design (protecting your money)
 
 1. **Paper trading by default**: generated projects default to `PaperBroker`, which fully simulates matching without touching real money.
-2. **Live-order safety gate**: orders to a real broker are blocked unless you personally call
-   `confirm_live_trading(i_understand_the_risk=True)` AND change `ALLOW_LIVE_TRADING`
-   to `True` in `main.py`.
-3. **Full-stage linkage**: the scaffold does not rely on the in-sample verdict alone. Its live flag can be enabled only when
-   out-of-sample persistence, currency, and risk bases are reliable and the stage is `tiny_live_validation`; otherwise it stays `false`.
+2. **Full-stage linkage**: the scaffold does not rely on the in-sample verdict alone. Only reliable
+   out-of-sample persistence, currency and risk bases at `tiny_live_validation` can produce both
+   `stage_code: tiny_live_validation` and `allow_live_trading: true`.
+3. **Runtime multi-gate enforcement**: generated `main.py` rechecks those two fields,
+   `risk.i_have_read_disclaimer is true`, and the local `ALLOW_LIVE_TRADING=True` switch before it
+   calls the broker's confirmation gate. Missing fields, wrong types, any other stage or broken YAML fail closed.
 
 > This tool generates code to help you, but it will **never place real-money orders for you, never fill in your API keys,
 > and never disarm the safety gate for you**. Real financial trading must be performed by you, at your own full responsibility.
@@ -262,28 +283,30 @@ cd my_bot && pip install -r requirements.txt && python main.py
 
 ```
 core/
-  models.py            # 統一資料模型（Trade / TradeLog，含契約乘數）
-  markets.py           # 市場規格：契約乘數白名單、代號辨識、槓桿標註
-  analyzer.py          # 高階一行式進入點
-  cli.py               # 命令列介面（18 個指令）
-  report.py            # 中文文字報告
-  report_html.py       # HTML 報告 + 分享圖卡（XSS 安全、自包含）
-  ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 各市場成本模型
-  metrics/             # 績效指標（performance / breakeven 轉正數字）
-  verdict/             # 統計裁決引擎 + 顯著性檢定（真正的 t 分布，純標準庫）
-  strategy/            # 交易模式反推 + 策略骨架 + per_tag 描述統計/反事實/跟單抽算
-  backtest/            # 樣本外驗證（holdout_validate）
-  trend/               # 時間趨勢：月報彙總 + 優勢衰減偵測（單一固定切點，防 p-hacking）
-  montecarlo/          # 風險情境模擬：爆倉比例、最壞回撤、連虧機率
-  survivorship.py      # 倖存者偏差模擬器（精確 DP，非模擬近似）
-  forensics/           # 假績效統計鑑識（runs test / Lo 校正夏普 / 尾數卡方）
-  antiscam/            # 反詐核心：特徵庫 + scam-check + 話術偵測 + 假老師驗證器
-  broker/              # 券商抽象層 + PaperBroker + 12 種券商範本（共 13 種券商選項）
-  charts/              # 四種開源圖表庫範本 + 樣式預覽
-  scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
-.claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
-core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 18 test files, 339 tests
+  models.py            # unified Trade / TradeLog model, including contract multipliers
+  markets.py           # market inference, multiplier allow-list and leverage metadata
+  onboarding.py        # beginner recording and conservative stage routing
+  analyzer.py          # high-level programmatic entry point
+  cli.py               # command-line interface (18 commands)
+  report.py            # Traditional Chinese text report
+  report_html.py       # self-contained, XSS-safe HTML report and share card
+  ingest/              # CSV/JSON/Excel import, beginner input and screenshot OCR review
+  metrics/             # performance metrics and break-even requirements
+  verdict/             # statistical verdict and significance tests
+  strategy/            # profiling, skeletons, per-tag descriptions and counterfactuals
+  backtest/            # chronological holdout validation
+  trend/               # time summaries and one fixed early-vs-recent decay test
+  montecarlo/          # ruin scenarios, drawdowns and losing-streak risk
+  survivorship.py      # exact dynamic-programming survivorship calculation
+  forensics/           # suspicious-performance diagnostics
+  antiscam/            # scam patterns, checklist, text scanner and guru-claim checks
+  broker/              # broker abstraction, PaperBroker and 12 live-broker templates
+  charts/              # four open-source chart templates and preview
+  scaffold/            # self-contained personal trading-project generator
+.claude/skills/anti-gambling-trader/SKILL.md   # Claude Code skill wrapper
+.agents/skills/anti-gambling-trader/SKILL.md   # Codex/general agent skill wrapper
+core/examples/         # bundled examples for three markets
+tests/                 # 18 test files, 344 tests
 ```
 
 > **Things we deliberately do not do**: no Benford's-law test (returns include negatives and do not span
@@ -294,10 +317,10 @@ tests/                 # 18 test files, 339 tests
 ## Tests
 
 ```bash
-# 用 pytest 一次跑全部（推薦）
+# Run the complete suite (recommended)
 python -m pytest tests/ -v
 
-# 不裝 pytest 時，每個檔有內建執行器，需逐一執行：
+# Without pytest, invoke each test module's built-in runner:
 python tests/test_core.py
 python tests/test_trading_tools.py
 python tests/test_antiscam.py
@@ -326,7 +349,7 @@ python tests/test_trade_logic_audit.py
 > Honesty statement: the byline above is a community pseudonym, and the "好棒棒反詐協會" is **not** a registered
 > legal entity or official organization. This project's credibility does not come from titles; it comes from:
 > public source code, reproducible experiments (`experiments/`, fixed seeds), the
-> [full methodology](docs/methodology.md), and 339 automated tests.
+> [full methodology](docs/methodology.md), and 344 automated tests.
 > Anyone is welcome to examine and challenge it — which is exactly what this tool asks the "gurus" to do.
 
 ## License

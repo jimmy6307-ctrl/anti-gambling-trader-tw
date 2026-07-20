@@ -12,7 +12,7 @@
 > 勝率 90% 可信嗎、出金要先繳稅正常嗎、被騙了怎麼辦。
 
 **English TL;DR** — An honest, open-source (MIT) trading-performance analyzer for
-Taiwan/US stocks and crypto. It uses expectancy, significance tests (t-test +
+Taiwan securities and derivatives, US stocks, crypto and forex. It uses expectancy, significance tests (t-test +
 centered bootstrap) and out-of-sample validation to tell whether your P&L is a
 repeatable edge or survivorship-biased luck — and it will actively discourage you
 if it's the latter. Includes scam-language scanning, fake-performance forensics
@@ -57,7 +57,8 @@ anti-gambling-trader forensics --file 老師的月報酬.txt
 anti-gambling-trader scam-check
 ```
 
-詳見 **[反詐指南 docs/anti-scam.md](docs/anti-scam.md)** 與 **[FAQ](docs/faq.md)**。
+詳見 **[完整功能與判讀指南](docs/user-guide.md)**、
+**[反詐指南](docs/anti-scam.md)** 與 **[FAQ](docs/faq.md)**。
 
 > 🆘 **懷疑自己正在被詐騙？** 立刻停止匯款，撥打 **165 反詐騙專線**，
 > 或上 [165 全民防騙網](https://165.npa.gov.tw)。查證合法業者：
@@ -67,7 +68,8 @@ anti-gambling-trader scam-check
 
 ---
 
-支援 **台股 / 美股 / 加密貨幣**，匯入 **CSV / JSON / Excel** 的交易紀錄，自動：
+支援 **台股 / 台股 ETF / 台指期與選擇權 / 美股 / 加密貨幣 / 外匯**，
+匯入 **CSV / JSON / Excel** 的交易紀錄，自動：
 
 - 計算 **勝率、盈虧比、期望值、獲利因子、最大回撤、夏普 / 索提諾值**
 - 用 **統計顯著性檢定（t 檢定 + Bootstrap）** 判斷「這是優勢還是運氣」
@@ -79,7 +81,7 @@ anti-gambling-trader scam-check
 - **轉正數字**：告訴你「勝率要到幾 % / 盈虧比要拉到多少，期望值才會轉正」
 - **反詐偵測**：把「聽老師 / 跟單」的交易單獨抽出算期望值 —— 用你自己的數字檢驗跟單到底賺不賺
 - **風險情境模擬**：用你的損益分布模擬未來，看有多少比例的路徑會爆倉
-- **時間趨勢**：月報、優勢衰減偵測（「你最近三個月期望值轉負」）
+- **時間趨勢**：月／季描述統計，以及固定早期與近期切點的單一優勢衰減檢定
 - **LINE 對話掃描**：理解 LINE 匯出標頭與跨訊息話術，顯示發言者、時間、原句與理由
 - **交易截圖覆核**：OCR 擷取進出場點位、數量、時間、損益、停損/停利；低信心不自動填
 - **交易技術線索**：辨識突破、均線、RSI、MACD 等畫面文字，但不把線索冒充成策略優勢
@@ -137,7 +139,7 @@ python -m core.cli scan-screenshot 券商截圖.png
 python -m core.cli demo               # 看「賭博型」範例
 python -m core.cli demo --edge        # 看「具優勢」範例
 
-# 6. 想用 Excel？產生範本；最簡單只填代號、平倉日、損益、策略
+# 6. 想用 Excel？產生範本；最簡單填代號、平倉日、淨損益、損益幣別、策略
 python -m core.cli init-template      # 產生 trades_template.csv
 
 # 7. 查看完整統計報告（市場會自動推斷）：
@@ -154,6 +156,8 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 > 截圖辨識只擷取「候選欄位」與文字線索，不會自動存入交易紀錄。OCR 可能看錯
 > 正負號、小數點與買賣方向，必須逐欄對照原圖；單張截圖也不能證明績效或交易能力。
+
+每條操作路徑、判讀門檻與人工覆核清單，見[完整功能與判讀指南](docs/user-guide.md)。
 
 > Windows 終端機若中文 / emoji 顯示異常：PowerShell 先執行 `$env:PYTHONUTF8=1` 再跑指令；
 > macOS / Linux 則在指令前面加 `PYTHONUTF8=1`。
@@ -176,12 +180,21 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 | pnl_currency | 損益幣別 / 帳戶幣別 | direct pnl 必填；價量推算才可依商品原生幣別判定 |
 | tag | 策略 / strategy / 進場理由 | 選填（強烈建議） |
 
+### 資料不完整時的保守處理
+
+- 缺少、無效或全部相同的平倉時間時，不用列順序冒充時序，也不宣稱完成樣本外驗證。
+- 不同或不明損益幣別不直接相加；混用有時區與無時區時間不安全排序。
+- 契約乘數、名目本金或 direct P&L 的進場基準不可靠時，停用報酬率與回撤百分比。
+- 模糊 gross/net 欄位不冒充淨損益；可信 direct net P&L 可保留，但相依指標會拒算。
+
+完整規則與修正方式見[完整功能與判讀指南：Fail closed](docs/user-guide.md#4-資料不完整時工具如何-fail-closed)。
+
 > `盈虧`、`已實現損益`、`realized_pnl` 的 gross/net 語意不明，工具會要求改成
 > 明示「淨」的欄名，或用 `--field pnl=你的欄名` 親自確認。`profit` 等 gross 欄
 > 只有在同列提供可信的 `total_fee/交易成本` 時才會扣成本後載入。
 
-> **建議務必填 `tag`（策略標籤）**：工具會分別計算每套邏輯的勝率，
-> 幫你看出「到底是哪一招真的有效、哪一招只是在送錢」。
+> **建議務必填 `tag`（策略標籤）**：工具會分別呈現每套邏輯的描述統計，
+> 幫你找出「樣本裡哪一招較差、值得停用檢查」；它不會認證個別策略具有優勢。
 
 ## 五種裁決等級
 
@@ -198,7 +211,9 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 1. **期望值**：每筆平均賺/賠多少。**真實期望值為負，長期就是輸（數學定義）；**
    **樣本期望值為負則「先當賭博處理」（保守原則）—— 它是估計，所以裁決同時附不確定性檢定。**
 2. **顯著性檢定**：t 檢定 + 置中 Bootstrap（shift method）重抽，雙雙 p < 0.05 才算「不是運氣」。p 值 = 「若沒有優勢（且模型假設成立），純靠抽樣波動出現至少同樣極端結果的機率」，不是「有優勢的機率」。偏保守。
-3. **樣本外驗證**：交易依時間單一切點切成前段（約 70%，樣本內）與後段（約 30%，樣本外），前段的優勢在後段若消失 → 過度配適 / 倖存者偏差。
+3. **樣本外驗證**：依真實平倉時間做單一切點，前後段各至少 10 筆且不拆同時點；
+   兩段都必須有顯著正期望、後段衰減小於 50%，規則也必須在看後段前凍結。
+   缺時間、混時區或幣別不可比時直接拒算，而不是用列順序猜測。
 4. **賭博特徵掃描**：負期望、單筆暴賺撐場、賺小賠大、極端回撤、長連虧、純當沖…
 
 ## 建立你自己的交易程式
@@ -248,11 +263,12 @@ cd my_bot && pip install -r requirements.txt && python main.py
 ### 三層安全設計（保護你的錢）
 
 1. **預設紙上模擬**：產出專案預設用 `PaperBroker`，完整模擬撮合但不碰真錢。
-2. **真實下單安全閘門**：真實券商的下單會被攔截，除非你親手呼叫
-   `confirm_live_trading(i_understand_the_risk=True)`，且 `main.py` 的
-   `ALLOW_LIVE_TRADING` 改為 `True`。
-3. **完整階段連動**：不是只看樣本內裁決；只有樣本外延續、幣別與風險基準都可靠，
-   且分流結果為 `tiny_live_validation` 時，設定檔才可能顯示 live 可用。其餘情況一律 `false`。
+2. **完整階段連動**：不是只看樣本內裁決；只有樣本外延續、幣別與風險基準都可靠，
+   且分流結果為 `tiny_live_validation` 時，設定檔才可能同時寫入
+   `stage_code: tiny_live_validation` 與 `allow_live_trading: true`。
+3. **Runtime 多重硬閘**：生成的 `main.py` 會重新驗證上述兩欄、
+   `risk.i_have_read_disclaimer is true` 與本機 `ALLOW_LIVE_TRADING=True`，全部通過後
+   才呼叫券商的雙重確認。缺欄位、錯誤型別、其他 stage 或 YAML 損壞一律 fail closed。
 
 > 本工具產生程式碼協助你，但**絕不替你用真錢下單、不替你填金鑰、不替你解除安全閘門**。
 > 真實金融交易必須由你自己操作並負全部責任。把未經驗證的賭博自動化，只會賠得更快。
@@ -263,11 +279,12 @@ cd my_bot && pip install -r requirements.txt && python main.py
 core/
   models.py            # 統一資料模型（Trade / TradeLog，含契約乘數）
   markets.py           # 市場規格：契約乘數白名單、代號辨識、槓桿標註
+  onboarding.py        # 新手記錄與停手／紙上／極小額驗證分流
   analyzer.py          # 高階一行式進入點
   cli.py               # 命令列介面（18 個指令）
   report.py            # 中文文字報告
   report_html.py       # HTML 報告 + 分享圖卡（XSS 安全、自包含）
-  ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 各市場成本模型
+  ingest/              # CSV/JSON/Excel、自動欄位辨識、新手輸入與截圖 OCR 覆核
   metrics/             # 績效指標（performance / breakeven 轉正數字）
   verdict/             # 統計裁決引擎 + 顯著性檢定（真正的 t 分布，純標準庫）
   strategy/            # 交易模式反推 + 策略骨架 + per_tag 描述統計/反事實/跟單抽算
@@ -281,8 +298,9 @@ core/
   charts/              # 四種開源圖表庫範本 + 樣式預覽
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
-core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 18 個測試檔，339 個測試
+.agents/skills/anti-gambling-trader/SKILL.md   # Codex／通用 agent 技能包裝
+core/examples/         # 三市場範例資料（隨套件打包，pip 安裝後 demo 仍可用）
+tests/                 # 18 個測試檔，344 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -323,7 +341,7 @@ python tests/test_trade_logic_audit.py
 > 誠實聲明：上列署名為社群化名，「好棒棒反詐協會」**不是**立案法人或
 > 官方組織。本專案的可信度不來自頭銜，來自：公開的原始碼、可重現的
 > 實驗（`experiments/`，固定 seed）、[方法論全文](docs/methodology.md)與
-> 339 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
+> 344 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
 > 做到的事。
 
 ## 授權

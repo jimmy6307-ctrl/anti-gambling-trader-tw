@@ -607,7 +607,10 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--from-analysis",
         metavar="PATH",
-        help="先分析這份交易紀錄,把裁決嵌入專案(勸退時預設禁用真實下單)",
+        help=(
+            "分析完整交易紀錄並嵌入安全階段；只有 tiny_live_validation 且"
+            "幣別/報酬/回撤基準可靠時，設定才可能允許極小額 live 驗證"
+        ),
     )
     s.add_argument("--out", default=".", help="專案輸出目錄(預設目前目錄)")
 

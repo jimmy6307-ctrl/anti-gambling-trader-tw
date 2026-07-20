@@ -22,7 +22,8 @@ def readme(opts, chart_lib, broker_tmpl, discouraged: bool, verdict_headline: st
 你的交易紀錄分析結果為:**{verdict_headline}**
 
 因此本專案的 `main.py` 已**預設禁用真實下單**(`ALLOW_LIVE_TRADING = False`)。
-請先讓你的策略通過統計與樣本外驗證,再手動解除 —— 這是保護你的錢,不是限制你。
+請先修正方法,用後續未看過的新交易重新驗證,再以 `--from-analysis` 重新產生專案。
+不要手動猜測或改寫 `stage_code` / `allow_live_trading` —— 這是保護你的錢,不是限制你。
 """
 
     return f"""# {opts.project_name}
@@ -72,9 +73,16 @@ python main.py            # 用 PaperBroker 跑一遍,並產生圖表
 
 真實下單受**安全閘門**保護。要解除,必須:
 
-1. 確認策略已通過反詐投資王的統計與樣本外驗證。
-2. 在 `main.py` 把 `ALLOW_LIVE_TRADING` 改為 `True`。
-3. 程式會要求你的券商呼叫 `confirm_live_trading(i_understand_the_risk=True)`。
+1. 用 `scaffold --from-analysis <完整交易紀錄>` 產生專案;只有階段為
+   `tiny_live_validation` 時,設定範本才可能同時寫入正確 stage 與允許旗標。
+2. 複製 `config.example.yaml` 為 `config.yaml`,閱讀免責聲明後才把
+   `risk.i_have_read_disclaimer` 設為布林值 `true`。不要手動改 stage 或允許旗標。
+3. 在 `main.py` 把 `ALLOW_LIVE_TRADING` 改為 `True`。
+4. Runtime 會重新驗證上述所有設定,最後才呼叫券商的
+   `confirm_live_trading(i_understand_the_risk=True)`。
+
+缺欄位、錯誤型別、其他 stage 或 YAML 損壞都會維持封鎖。即使通過全部閘門,
+也只代表程式允許你自行做極小額驗證,不代表適合重押或全職交易。
 
 這些摩擦是刻意設計的 —— 讓你在動用真錢前,被迫停下來想清楚。
 
