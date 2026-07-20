@@ -110,7 +110,7 @@ def test_loader_rejects_rows_without_computable_pnl():
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "pnl_blank.csv"
         p.write_text(
-            "symbol,pnl\nAAPL,100\nAAPL,\nAAPL,-50\n", encoding="utf-8")
+            "symbol,net_pnl,pnl_currency\nAAPL,100,USD\nAAPL,,USD\nAAPL,-50,USD\n", encoding="utf-8")
         from core.ingest.loader import load_trades
         log = load_trades(str(p))
         assert len(log.trades) == 2, "空白 pnl 列應被略過,不是補 0"
@@ -119,8 +119,8 @@ def test_loader_rejects_rows_without_computable_pnl():
         # 進場價無法解析 → 不得把出場價整段當獲利
         p2 = Path(td) / "bad_price.csv"
         p2.write_text(
-            "symbol,entry_price,exit_price,quantity,fees\n"
-            "AAPL,abc,100,10,0\nAAPL,50,60,10,0\n", encoding="utf-8")
+            "symbol,side,entry_price,exit_price,quantity,fees\n"
+            "AAPL,long,abc,100,10,0\nAAPL,long,50,60,10,0\n", encoding="utf-8")
         log2 = load_trades(str(p2))
         assert len(log2.trades) == 1, "進場價爛掉的列應略過"
         assert log2.trades[0].pnl == 100.0
@@ -128,7 +128,7 @@ def test_loader_rejects_rows_without_computable_pnl():
         # nan/inf 字串視同無法解析
         p3 = Path(td) / "nan_inf.csv"
         p3.write_text(
-            "symbol,pnl\nAAPL,nan\nAAPL,inf\nAAPL,5\n", encoding="utf-8")
+            "symbol,net_pnl,pnl_currency\nAAPL,nan,USD\nAAPL,inf,USD\nAAPL,5,USD\n", encoding="utf-8")
         log3 = load_trades(str(p3))
         assert [t.pnl for t in log3.trades] == [5.0]
 

@@ -66,7 +66,11 @@ def scam_warnings_for(
         )
 
     # 4. 純當沖 / 極短線 + 虧損 → 常見於被帶進『當沖致富』的群組
-    if profile.style_code == "scalp_intraday" and metrics.expectancy < 0:
+    if (
+        profile.timing_data_complete
+        and profile.style_code == "scalp_intraday"
+        and metrics.expectancy < 0
+    ):
         warnings.append(
             "🟡 你以當沖 / 極短線為主且整體虧損。若你是被『當沖月入百萬』之類的"
             "群組或課程吸引進場,請冷靜:能靠當沖長期穩定獲利的是極少數,"

@@ -18,6 +18,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 
+from ..markets import infer_pnl_currency
 from ..metrics.performance import PerformanceMetrics, compute_metrics
 from ..models import TradeLog
 from ..verdict.statistics import SignificanceResult, test_expectancy_positive
@@ -46,6 +47,8 @@ class OutOfSampleReport:
     degradation: float            # 期望值衰減比例(正=變差)
     headline: str
     interpretation: list[str]
+    available: bool = True
+    unavailable_reason: str = ""
 
     def as_dict(self) -> dict:
         def seg(s: SegmentResult) -> dict:
@@ -56,10 +59,13 @@ class OutOfSampleReport:
                 "expectancy": s.expectancy,
                 "profit_factor": s.profit_factor,
                 "total_pnl": s.total_pnl,
+                "p_value_t": s.significance.p_value_t,
                 "p_value_bootstrap": s.significance.p_value_bootstrap,
                 "is_significant": s.significance.is_significant,
             }
         return {
+            "available": self.available,
+            "unavailable_reason": self.unavailable_reason,
             "in_sample": seg(self.in_sample),
             "out_sample": seg(self.out_sample),
             "edge_persisted": self.edge_persisted,
@@ -115,9 +121,86 @@ def holdout_validate(
     Returns:
         OutOfSampleReport
     """
-    ordered = list(log.sorted_by_time())
-    n = len(ordered)
+    if not 0 < split_ratio < 1:
+        raise ValueError(f"split_ratio 必須介於 0 與 1 之間,收到 {split_ratio}")
+
+    raw = list(log)
+    n = len(raw)
     interp: list[str] = []
+
+    # 只要混入一筆未知出場時間,整份紀錄就沒有可信的完整時序。
+    # 不可靜默丟掉未知列(會改變樣本),也不可拿 placeholder 排在最前面後硬切。
+    # getattr 保留對舊版/外部自訂 Trade-like 物件的相容性。
+    if any(not getattr(t, "exit_time_known", True) for t in raw):
+        empty_sig = SignificanceResult(0, 0, 0, 0, 1.0, 1.0, 0, 0, False)
+        seg = SegmentResult("出場時間不完整", n, 0, 0, 0, 0, empty_sig)
+        return OutOfSampleReport(
+            in_sample=seg,
+            out_sample=seg,
+            edge_persisted=False,
+            degradation=1.0,
+            headline="⚠️ 部分交易缺少真實出場時間,無法做時序樣本外驗證。",
+            interpretation=[
+                "樣本外驗證必須知道每筆交易何時結束;用進場時間或預設日期代替會造成前視偏差。",
+                "本工具不會刪掉缺時間的交易後假裝完成驗證;請補齊 exit_time 再重跑。",
+            ],
+            available=False,
+            unavailable_reason="部分交易缺少可靠的出場時間",
+        )
+
+    # 樣本內/外的 expectancy 是「金額」，切分前必須先確認整份紀錄使用
+    # 同一幣別。若先各自 compute，前段 USD、後段 TWD 會被當成相同單位
+    # 直接比較，甚至可能錯報優勢延續。
+    currencies: set[str] = set()
+    unresolved_currency = 0
+    for trade in raw:
+        currency = getattr(trade, "pnl_currency", None)
+        if not currency:
+            currency = infer_pnl_currency(trade.symbol, trade.market)
+        if currency:
+            currencies.add(str(currency).upper())
+        else:
+            unresolved_currency += 1
+    if len(currencies) > 1 or unresolved_currency:
+        shown = "、".join(sorted(currencies)) or "未知"
+        empty_sig = SignificanceResult(0, 0, 0, 0, 1.0, 1.0, 0, 0, False)
+        seg = SegmentResult("損益幣別不可比", n, 0, 0, 0, 0, empty_sig)
+        return OutOfSampleReport(
+            in_sample=seg,
+            out_sample=seg,
+            edge_persisted=False,
+            degradation=1.0,
+            headline="⚠️ 損益幣別不同或不明，無法比較樣本內/外期望值。",
+            interpretation=[
+                f"偵測到幣別 {shown}（不明 {unresolved_currency} 筆）；"
+                "不同幣別金額沒有匯率與同一結算基準時不能直接相減或比較。",
+                "請依帳戶結算幣別分檔，或先用可稽核匯率換成同一幣別。",
+            ],
+            available=False,
+            unavailable_reason="樣本內外的損益幣別不同或不明",
+        )
+
+    awareness = {
+        bool(t.exit_time.tzinfo is not None and t.exit_time.utcoffset() is not None)
+        for t in raw
+    }
+    if len(awareness) > 1:
+        empty_sig = SignificanceResult(0, 0, 0, 0, 1.0, 1.0, 0, 0, False)
+        seg = SegmentResult("時區基準不一致", n, 0, 0, 0, 0, empty_sig)
+        return OutOfSampleReport(
+            in_sample=seg,
+            out_sample=seg,
+            edge_persisted=False,
+            degradation=1.0,
+            headline="⚠️ 出場時間混用有時區與無時區格式,無法安全排序做樣本外驗證。",
+            interpretation=[
+                "請先把所有 exit_time 統一成同一 UTC offset，或全部改成同一當地時區。"
+            ],
+            available=False,
+            unavailable_reason="出場時間的時區基準不一致",
+        )
+
+    ordered = list(log.sorted_by_time())
 
     if n < 20:
         # 樣本太少,切兩半後每段都不可靠
@@ -133,10 +216,39 @@ def holdout_validate(
                 "切成樣本內/外後每段都太小,任何結論都不可靠。",
                 "請先累積更多交易紀錄,再回來做這項驗證。",
             ],
+            available=False,
+            unavailable_reason="交易筆數不足，切分後每段少於 10 筆",
         )
 
-    split = max(10, int(n * split_ratio))
-    split = min(split, n - 10)  # 確保兩段各至少 10 筆
+    target_split = max(10, int(n * split_ratio))
+    target_split = min(target_split, n - 10)  # 確保兩段各至少 10 筆
+
+    # 不可把同一個出場時間的交易拆到樣本內與樣本外。那通常是同一事件的
+    # 多筆單;拆開會讓後段偷看到前段同一時點的資訊。更重要的是,pnl-only
+    # 檔案若沒有時間,loader 會把全部交易標成同一預設時間;此時按列順序
+    # 硬切並稱為「時序樣本外」是假的驗證,必須誠實拒絕。
+    valid_splits = [
+        i for i in range(10, n - 9)
+        if ordered[i - 1].exit_time < ordered[i].exit_time
+    ]
+    if not valid_splits:
+        empty_sig = SignificanceResult(0, 0, 0, 0, 1.0, 1.0, 0, 0, False)
+        seg = SegmentResult("缺少可切分時間", n, 0, 0, 0, 0, empty_sig)
+        return OutOfSampleReport(
+            in_sample=seg,
+            out_sample=seg,
+            edge_persisted=False,
+            degradation=1.0,
+            headline="⚠️ 缺少可切分的出場時間,無法做時序樣本外驗證。",
+            interpretation=[
+                "交易的出場時間全部相同,或任何時間邊界都無法讓前後段各保留至少 10 筆。",
+                "本工具不會用檔案列順序冒充時間順序;請補上真實 exit_time 後再驗證。",
+            ],
+            available=False,
+            unavailable_reason="沒有可維持前後段各至少 10 筆的時間切點",
+        )
+
+    split = min(valid_splits, key=lambda i: (abs(i - target_split), i))
 
     in_log = TradeLog(ordered[:split], log.source, log.account_label + "::in")
     out_log = TradeLog(ordered[split:], log.source, log.account_label + "::out")
@@ -144,8 +256,9 @@ def holdout_validate(
     in_seg = _summarize(in_log, "樣本內(前段)", n_bootstrap)
     out_seg = _summarize(out_log, "樣本外(後段)", n_bootstrap)
 
-    # 優勢是否延續:樣本外期望值仍為正、衰退不過大,
-    # 且樣本外本身要『統計顯著』 —— 否則樣本外那段正期望可能只是運氣。
+    # 優勢是否延續:樣本內必須先有顯著正期望,樣本外期望值仍為正、
+    # 衰退不過大,且樣本外本身也要『統計顯著』。若前段從未建立優勢,
+    # 後段再漂亮也只能算新的探索性訊號,不能倒推成「原有優勢延續」。
     # (這是修正:原本只看期望值方向與衰減,沒檢查樣本外顯著性,
     #  會把 10~15 筆剛好為正但 p 值很高的結果誤報成『優勢延續』。)
     degradation = 1.0
@@ -153,7 +266,9 @@ def holdout_validate(
         degradation = (in_seg.expectancy - out_seg.expectancy) / abs(in_seg.expectancy)
 
     edge_persisted = (
-        out_seg.expectancy > 0
+        in_seg.expectancy > 0
+        and in_seg.significance.is_significant
+        and out_seg.expectancy > 0
         and degradation < 0.5
         and out_seg.significance.is_significant
     )
@@ -164,6 +279,16 @@ def holdout_validate(
         interp += [
             "前段本身就不賺錢,談不上『優勢延續』的問題。",
             "目前的證據比較支持『這是賭博/虧損策略』而非『有方法』。",
+        ]
+    elif not in_seg.significance.is_significant:
+        headline = "⚠️ 樣本內未確認:前段帳面雖為正,但統計上無法排除只是運氣。"
+        interp += [
+            f"樣本內期望值 {in_seg.expectancy:+.2f},但未通過顯著性檢定"
+            f"(bootstrap p={in_seg.significance.p_value_bootstrap:.3f}、"
+            f"t p={in_seg.significance.p_value_t:.3f})。",
+            "前段尚未建立可供『延續』驗證的優勢,因此即使後段表現較好,"
+            "也不能倒過來宣稱原有優勢通過樣本外驗證。",
+            "後段結果只能視為新的探索性證據;應先固定規則,再用下一段完全沒看過的資料驗證。",
         ]
     elif edge_persisted:
         headline = "✅ 優勢延續:樣本內展現的正期望值,在樣本外仍然存在且統計顯著。"

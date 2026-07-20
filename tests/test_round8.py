@@ -87,9 +87,10 @@ def test_zero_expectancy_wording_honest():
 def test_pnl_only_drawdown_pct_flagged_unreliable():
     """pnl-only 資料沒有資本基準:回撤 % 標記不可靠,報告寫「無法計算」。"""
     trades = [Trade(symbol="X", market=Market.US_STOCK, side=Side.LONG,
-                    entry_time=datetime(2026, 1, 1), exit_time=datetime(2026, 1, 1),
+                    entry_time=datetime(2026, 1, 1) + timedelta(minutes=i),
+                    exit_time=datetime(2026, 1, 1) + timedelta(minutes=i),
                     entry_price=0.0, exit_price=0.0, quantity=0.0, fees=0.0,
-                    pnl=p) for p in (100.0, -50.0, 30.0)]
+                    pnl=p) for i, p in enumerate((100.0, -50.0, 30.0))]
     m = compute_metrics(TradeLog(trades=trades, source="t", account_label="t"))
     assert not m.drawdown_pct_reliable
     assert m.max_drawdown == 50.0
@@ -114,7 +115,7 @@ def test_loader_reads_big5_csv():
 
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "big5.csv"
-        content = ("代號,方向,進場時間,出場時間,進場價,出場價,數量,手續費,策略\n"
+        content = ("代號,方向,進場時間,出場時間,進場價,出場價,數量,交易成本,策略\n"
                    "2330,買,2025-01-03,2025-02-10,1000,1080,1000,0,季線突破\n")
         p.write_bytes(content.encode("cp950"))
         log = load_trades(str(p))
@@ -218,12 +219,15 @@ def test_cp950_read_is_disclosed_in_source():
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "b5.csv"
         p.write_bytes(
-            ("symbol,pnl,tag\n2330,100,測試策略\n").encode("cp950"))
+            ("symbol,net_pnl,pnl_currency,tag\n2330,100,TWD,測試策略\n").encode("cp950"))
         log = load_trades(str(p))
         assert "cp950" in log.source or "Big5" in log.source
         # 合法 UTF-8 檔不得標 cp950
         p2 = Path(td) / "u8.csv"
-        p2.write_text("symbol,pnl,tag\n2330,100,測試策略\n", encoding="utf-8")
+        p2.write_text(
+            "symbol,net_pnl,pnl_currency,tag\n2330,100,TWD,測試策略\n",
+            encoding="utf-8",
+        )
         log2 = load_trades(str(p2))
         assert "cp950" not in log2.source
         assert log2.trades[0].tag == "測試策略"

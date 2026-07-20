@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..broker.registry import BROKER_TEMPLATES
 from ..charts.registry import get_chart_lib
+from ..onboarding import StageAssessment
 from ..verdict.judge import Verdict
 from . import templates as T
 
@@ -29,6 +30,7 @@ class ScaffoldOptions:
     market: str = "us_stock"            # tw_stock | us_stock | crypto
     symbols: list[str] = field(default_factory=lambda: ["AAPL"])
     verdict: Optional[Verdict] = None   # 若有分析過交易紀錄,帶入裁決以嵌入安全閘門
+    stage: Optional[StageAssessment] = None  # 完整 stage/OOS 安全分流；缺少時一律不開 live
 
     def validate(self) -> None:
         """驗證輸入,拒絕會造成路徑穿越或產碼注入的危險值。"""
@@ -64,10 +66,20 @@ def generate_project(opts: ScaffoldOptions) -> list[GeneratedFile]:
     chart_lib = get_chart_lib(opts.chart)
     broker_tmpl = BROKER_TEMPLATES.get(opts.broker)  # paper 不在註冊表中,為 None
 
-    # 裁決:決定真實下單預設是否禁用
-    discouraged = bool(opts.verdict and opts.verdict.should_discourage)
+    # 真錢旗標必須依完整 stage（含 OOS、幣別與回撤基準），不能只看
+    # 樣本內 verdict。沒有 stage 也代表尚未完成驗證，保守維持 false。
+    live_stage_approved = bool(
+        opts.stage and opts.stage.code == "tiny_live_validation"
+    )
+    discouraged = not live_stage_approved
     verdict_level = opts.verdict.level.value if opts.verdict else "unknown"
-    verdict_headline = opts.verdict.headline if opts.verdict else "(尚未分析交易紀錄)"
+    if opts.stage:
+        verdict_headline = f"{opts.stage.title}：{opts.stage.reason}"
+    else:
+        verdict_headline = (
+            opts.verdict.headline if opts.verdict
+            else "(尚未完成含樣本外與風險基準的交易階段分析)"
+        )
 
     # ── README ──
     files.append(GeneratedFile("README.md", T.readme(opts, chart_lib, broker_tmpl,

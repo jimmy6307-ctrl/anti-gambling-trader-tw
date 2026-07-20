@@ -18,6 +18,11 @@ description: 免費開源工具:掃描投資群話術、檢驗老師績效宣稱
 
 ## 從這裡開始
 
+### 🧭 [完整功能與判讀指南](user-guide.md)
+
+從 `start`、五題記錄與 `fit-check`，一路說明 LINE 話術聚合、截圖 OCR 人工覆核、
+資料不足時的 fail-closed 規則，以及停手／紙上模擬／極小額驗證的真正門檻。
+
 ### ❓ [常見問題 FAQ](faq.md)
 
 「投資群組是詐騙嗎?」「勝率 90% 是真的嗎?」「出金要先繳稅,正常嗎?」——
@@ -42,7 +47,8 @@ description: 免費開源工具:掃描投資群話術、檢驗老師績效宣稱
 git clone https://github.com/mars-tw/anti-gambling-trader-tw.git
 cd anti-gambling-trader-tw
 pip install -e .           # 安裝
-anti-gambling-trader demo  # 先看內建範例
+anti-gambling-trader start # 依手上的素材選最短路徑
+anti-gambling-trader demo  # 沒資料時先看明確標示的內建範例
 ```
 
 原始碼與完整說明:[GitHub — mars-tw/anti-gambling-trader-tw](https://github.com/mars-tw/anti-gambling-trader-tw)

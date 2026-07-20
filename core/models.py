@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
@@ -56,6 +56,12 @@ class Trade:
                       契約乘數。股票 / 加密貨幣為 1.0;台指期 200、小台 50、
                       台指選擇權 50。**不乘這個數字,期貨損益會少算 200 倍。**
                       預設 1.0,因此舊有的股票 / 加密貨幣資料行為完全不變。
+        entry_time_known / exit_time_known:
+                      原始資料是否真的提供進/出場時間。loader 為了保持
+                      datetime 型別會使用佔位值，但旗標為 False 時，任何
+                      當沖、持倉天數或時間趨勢都不得使用該佔位值。
+        side_known:   原始資料是否明示做多/做空。直接淨損益在方向缺漏時仍可
+                      做金額統計，但不得拿預設值反推方向偏好或策略。
     """
 
     symbol: str
@@ -70,11 +76,44 @@ class Trade:
     pnl: Optional[float] = None
     tag: Optional[str] = None
     contract_multiplier: float = 1.0
+    entry_time_known: bool = True
+    exit_time_known: bool = True
+    contract_multiplier_known: bool = True
+    notional_reliable: bool = True
+    pnl_currency: Optional[str] = None
+    side_known: bool = True
+    entry_local_date: Optional[date] = None
+    exit_local_date: Optional[date] = None
+    pnl_is_direct: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
+        self.pnl_is_direct = self.pnl is not None
+        if (
+            self.market in (Market.TW_FUTURES, Market.TW_OPTIONS)
+            and self.contract_multiplier == 1.0
+            and self.contract_multiplier_known
+        ):
+            # 公開 analyze_log API 可能繞過 loader；台期乘數預設 1 會把損益
+            # 算錯 10~4000 倍。未明示乘數時一律降級，價差推算則直接拒絕。
+            self.contract_multiplier_known = False
+            self.notional_reliable = False
+            if not self.pnl_is_direct:
+                raise ValueError(
+                    f"{self.symbol}: 台灣期貨/選擇權必須明示正確 contract_multiplier，"
+                    "或提供券商 direct net pnl"
+                )
         # 不變量:出場不可早於進場。這種列是髒資料(或欄位對錯),
         # 靜默收下會產生負持倉天數、被 profiler 誤分類成短線 —— 直接拒絕。
-        if self.exit_time < self.entry_time:
+        if (
+            self.entry_time_known
+            and self.exit_time_known
+            and not self.time_basis_consistent
+        ):
+            raise ValueError(
+                f"{self.symbol}: 同一筆交易的進出場時間混用了有時區與無時區格式，"
+                "請先統一時區基準"
+            )
+        if self.time_basis_consistent and self.exit_time < self.entry_time:
             raise ValueError(
                 f"{self.symbol}: 出場時間({self.exit_time:%Y-%m-%d %H:%M})早於"
                 f"進場時間({self.entry_time:%Y-%m-%d %H:%M}),資料有誤"
@@ -99,6 +138,8 @@ class Trade:
     @property
     def contract_value(self) -> float:
         """進場時的契約價值(股票即市值;期貨為 價格 × 乘數 × 口數)。"""
+        if not self.notional_reliable or not self.contract_multiplier_known:
+            return 0.0
         return abs(self.entry_price * self.quantity * self.contract_multiplier)
 
     @property
@@ -116,8 +157,21 @@ class Trade:
         return (self.pnl or 0.0) / basis
 
     @property
-    def holding_days(self) -> float:
-        """持倉天數。用於區分長期投資 vs 當沖/短線投機。"""
+    def time_basis_consistent(self) -> bool:
+        """進出場時間皆已知，且同為 aware 或同為 naive datetime。"""
+        if not (self.entry_time_known and self.exit_time_known):
+            return False
+
+        def is_aware(value: datetime) -> bool:
+            return value.tzinfo is not None and value.utcoffset() is not None
+
+        return is_aware(self.entry_time) == is_aware(self.exit_time)
+
+    @property
+    def holding_days(self) -> float | None:
+        """持倉天數；時間缺漏或時區基準不一致時回傳 None。"""
+        if not self.time_basis_consistent:
+            return None
         delta = self.exit_time - self.entry_time
         return delta.total_seconds() / 86400.0
 
@@ -129,7 +183,11 @@ class Trade:
         (台股當沖證交稅減半)與風格判定兩處各自為政:跨夜但 < 24h 的
         短單若用 holding_days < 1 會被當沖,但用日曆日卻不是,造成不一致。
         """
-        return self.entry_time.date() == self.exit_time.date()
+        return (
+            self.time_basis_consistent
+            and (self.entry_local_date or self.entry_time.date())
+            == (self.exit_local_date or self.exit_time.date())
+        )
 
 
 @dataclass

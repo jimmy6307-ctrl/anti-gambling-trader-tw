@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 
 PAGES = ["index.md", "faq.md", "anti-scam.md", "methodology.md",
-         "quickstart.md", "audit-trail.md"]
+         "quickstart.md", "audit-trail.md", "user-guide.md"]
 
 
 def _body_h1_count(text: str) -> int:
@@ -82,7 +82,9 @@ def test_english_readme_exists_and_faithful_anchors():
 
 def test_docs_pages_have_byline_footer():
     """內容頁要有頁面級署名(維護者/AI 輔助/審閱日期)—— E-E-A-T 要求。"""
-    for name in ("faq.md", "anti-scam.md", "methodology.md", "audit-trail.md"):
+    for name in (
+        "faq.md", "anti-scam.md", "methodology.md", "audit-trail.md", "user-guide.md"
+    ):
         s = io.open(DOCS / name, encoding="utf-8").read()
         assert "維護者:好棒棒反詐協會" in s, f"{name} 缺署名頁尾"
         assert "AI 輔助" in s, f"{name} 缺 AI 使用揭露"

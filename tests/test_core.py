@@ -96,9 +96,9 @@ def test_metrics_empty_log():
 
 
 def test_max_consecutive_losses():
+    pnls = [10, -1, -1, -1, 10, -1]
     log = TradeLog([
-        _make_trade(10), _make_trade(-1), _make_trade(-1),
-        _make_trade(-1), _make_trade(10), _make_trade(-1),
+        _make_trade(pnl, win_days=i + 1) for i, pnl in enumerate(pnls)
     ])
     m = compute_metrics(log)
     assert m.max_consecutive_losses == 3
@@ -106,7 +106,10 @@ def test_max_consecutive_losses():
 
 def test_drawdown_pct_is_bounded():
     """回撤百分比不該爆衝成天文數字(回歸測試)。"""
-    log = TradeLog([_make_trade(10), _make_trade(-500), _make_trade(5)])
+    log = TradeLog([
+        _make_trade(pnl, win_days=i + 1)
+        for i, pnl in enumerate((10, -500, 5))
+    ])
     m = compute_metrics(log)
     assert 0.0 <= m.max_drawdown_pct <= 5.0  # 應在合理範圍
 
@@ -155,6 +158,8 @@ def test_verdict_small_sample_negative_is_insufficient_not_gambling():
     v = judge(log, n_bootstrap=1000)
     assert v.level == VerdictLevel.INSUFFICIENT
     assert v.should_discourage  # 仍勸阻重押
+    assert any("紙上模擬" in item for item in v.advice)
+    assert all("用小額" not in item for item in v.advice)
 
 
 def test_verdict_insufficient_sample():
@@ -186,7 +191,10 @@ def test_e2e_edge_example():
     result = analyze_file(EXAMPLES / "us_stock_edge.csv", market_hint=Market.US_STOCK)
     assert not result.verdict.should_discourage
     assert result.verdict.level == VerdictLevel.STATISTICAL_EDGE
-    assert "_DISCOURAGED = False" in result.strategy_code
+    # 這份示例仍有同日、無時分秒的重複出場時間，無法建立可信逐筆回撤；
+    # 樣本內 verdict 可為 edge，但策略骨架必須服從更保守的完整 stage。
+    assert not result.metrics.sequence_metrics_reliable
+    assert "_DISCOURAGED = True" in result.strategy_code
     # 應辨識出「季線突破」勝率高於「均線多頭」
     wr = result.profile.per_tag_winrate
     assert wr.get("季線突破", 0) > wr.get("均線多頭", 1)

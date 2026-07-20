@@ -143,6 +143,9 @@ def test_expectancy_positive(
     Returns:
         SignificanceResult
     """
+    if not 0 < alpha < 1:
+        raise ValueError(f"alpha 必須介於 0 與 1 之間,收到 {alpha}")
+
     # n_bootstrap < 1 會導致除以零(p_boot)或空 list 索引(CI 分位數),
     # 且 CLI 的 --bootstrap 直通這裡 —— 必須在入口擋下,給清楚的錯誤訊息。
     if n_bootstrap < 1:
@@ -266,6 +269,11 @@ def required_sample_size_from_pnls(
     Returns:
         所需樣本數;若平均損益 <= 0(負期望)則回傳 None(再多樣本也沒用)。
     """
+    if not 0 < alpha < 1:
+        raise ValueError(f"alpha 必須介於 0 與 1 之間,收到 {alpha}")
+    if not 0 < power < 1:
+        raise ValueError(f"power 必須介於 0 與 1 之間,收到 {power}")
+
     n = len(pnls)
     if n < 2:
         return None
@@ -276,9 +284,17 @@ def required_sample_size_from_pnls(
     std = math.sqrt(var)
     if std == 0:
         return 30
-    z = Z_ALPHA_ONE_SIDED + Z_POWER_80
-    if abs(power - 0.8) > 1e-9:
-        z = Z_ALPHA_ONE_SIDED + _z_from_power(power)
+    # alpha 是公開參數,不可只收進簽名卻仍永遠用 0.05 的常數。
+    # 單尾檢定的臨界值為 z_(1-alpha);檢定力則用 z_power。
+    z_alpha = (
+        Z_ALPHA_ONE_SIDED
+        if abs(alpha - 0.05) <= 1e-12 else _z_from_power(1 - alpha)
+    )
+    z_power = (
+        Z_POWER_80
+        if abs(power - 0.8) <= 1e-12 else _z_from_power(power)
+    )
+    z = z_alpha + z_power
     need = (z * std / mean) ** 2
     return max(30, int(math.ceil(need)))
 
