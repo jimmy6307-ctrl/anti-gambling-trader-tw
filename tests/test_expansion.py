@@ -343,6 +343,8 @@ def test_html_report_no_future_projection():
 def test_share_card_renders():
     card = render_share_card(_sample_result())
     assert "不構成投資建議" in card
+    assert "目前適合的階段" in card
+    assert "USD（推定）" in card
     assert len(card) > 500
 
 
@@ -438,8 +440,8 @@ def test_montecarlo_param_validation():
             pass
 
 
-def test_loader_mixed_timezone_does_not_crash():
-    """混合帶時區(ISO)與不帶時區的時間,排序/當沖判定不得 TypeError。"""
+def test_loader_rejects_mixed_timezone_bases():
+    """有 offset 與 naive 掛鐘時間混用時，不能假裝在同一時間基準排序。"""
     import tempfile
     from core.ingest.loader import load_trades
     with tempfile.TemporaryDirectory() as d:
@@ -450,10 +452,12 @@ def test_loader_mixed_timezone_does_not_crash():
             "2330,買,2025-01-06,2025-01-07,1000,1020,1000\n",
             encoding="utf-8-sig",
         )
-        log = load_trades(f, market_hint=Market.TW_STOCK)
-        assert len(log) == 2
-        ordered = log.sorted_by_time()           # 這裡以前會 TypeError
-        assert ordered.trades[0].is_day_trade    # 帶時區的那筆是當沖
+        try:
+            load_trades(f, market_hint=Market.TW_STOCK)
+        except ValueError as exc:
+            assert "混用了有時區與無時區" in str(exc)
+        else:
+            raise AssertionError("時間基準不一致時不得排序或做 OOS")
 
 
 # ══════ 第四輪巡檢(gpt-5.5 + grok-4.5 + opus4.8)修正的防退化測試 ══════

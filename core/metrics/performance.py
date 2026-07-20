@@ -10,7 +10,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from ..models import TradeLog
+from ..markets import infer_pnl_currency, is_leveraged
+from ..models import Market, Side, TradeLog
 
 # 當沖/極短線的判定門檻:當沖交易佔比超過此值,視為「以當沖為主」。
 # 集中定義,供 performance 與 profiler 共用(避免魔術數字 0.7 散落多處)。
@@ -59,7 +60,24 @@ class PerformanceMetrics:
 
     # ── 交易風格 ────────────────────────────────
     avg_holding_days: float = 0.0
+    intraday_ratio: float = 0.0
     is_mostly_intraday: bool = False  # 是否多為當沖/極短線(影響賭博判斷)
+    timing_known_trades: int = 0
+    timing_unknown_trades: int = 0
+    timing_data_complete: bool = True
+    timing_metrics_available: bool = False
+    timing_note: str = ""
+
+    # 回撤、連虧與累積曲線需要可靠的出場順序；報酬率/夏普需要每筆
+    # 名目部位都可信。任一缺失時不得用 0 或佔位值假裝有算。
+    sequence_metrics_reliable: bool = True
+    sequence_note: str = ""
+    return_metrics_reliable: bool = True
+    return_note: str = ""
+    drawdown_note: str = ""
+    pnl_currency: str = ""
+    currency_reliable: bool = True
+    currency_note: str = ""
 
     # 回撤百分比是否可靠:pnl-only 資料無資本基準時為 False,
     # 顯示層必須說「無法計算」而不是印假的 0%
@@ -108,13 +126,106 @@ def fmt_ratio(x: float, decimals: int = 2) -> str:
 def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     """從交易紀錄計算完整績效指標。"""
     m = PerformanceMetrics()
-    trades = list(log.sorted_by_time())
+    raw_trades = list(log)
+    all_exit_times_known = all(
+        getattr(t, "exit_time_known", True) for t in raw_trades
+    )
+    exit_times = [t.exit_time for t in raw_trades] if all_exit_times_known else []
+    exit_order_is_unique = len(exit_times) == len(set(exit_times))
+    time_awareness = {
+        bool(t.exit_time.tzinfo is not None and t.exit_time.utcoffset() is not None)
+        for t in raw_trades if getattr(t, "exit_time_known", True)
+    }
+    time_basis_consistent = len(time_awareness) <= 1
+    m.sequence_metrics_reliable = (
+        all_exit_times_known and exit_order_is_unique and time_basis_consistent
+    )
+    if not all_exit_times_known:
+        m.sequence_note = (
+            "部分交易缺少可靠的出場時間；最大回撤、最長連虧與累積曲線無法計算。"
+        )
+    elif not time_basis_consistent:
+        m.sequence_note = (
+            "出場時間混用有時區與無時區格式，無法安全排序；"
+            "最大回撤、最長連虧與逐筆累積曲線無法計算。"
+        )
+    elif not exit_order_is_unique:
+        m.sequence_note = (
+            "多筆交易具有相同出場時間，群組內真實先後未知；"
+            "最大回撤、最長連虧與累積曲線無法計算。"
+        )
+    trades = (
+        list(log.sorted_by_time()) if m.sequence_metrics_reliable else raw_trades
+    )
     m.total_trades = len(trades)
     if not trades:
         return m
 
+    if any(
+        t.side == Side.SHORT
+        and t.market in (Market.TW_STOCK, Market.TW_ETF, Market.US_STOCK)
+        and not getattr(t, "pnl_is_direct", False)
+        for t in trades
+    ):
+        raise ValueError(
+            "放空交易若只用價差推算，會漏掉借券/融券費、利息與召回成本；"
+            "請提供券商已扣全部成本的 direct net pnl 後再分析。"
+        )
+
     pnls = [t.pnl or 0.0 for t in trades]
-    returns = [t.return_pct for t in trades]
+    m.return_metrics_reliable = all(
+        getattr(t, "notional_reliable", True)
+        and getattr(t, "contract_multiplier_known", True)
+        and t.contract_value > 0
+        # direct pnl 是帳戶結算後金額；沒明示幣別時，不能假定它與
+        # 商品報價/名目本金同幣，否則會製造看似精確的假報酬率。
+        and not (
+            getattr(t, "pnl_is_direct", False)
+            and not getattr(t, "pnl_currency", None)
+        )
+        and not (
+            getattr(t, "pnl_currency", None)
+            and infer_pnl_currency(t.symbol, t.market)
+            and str(t.pnl_currency).upper() != infer_pnl_currency(t.symbol, t.market)
+        )
+        for t in trades
+    )
+    returns = [t.return_pct for t in trades] if m.return_metrics_reliable else []
+    currencies = {
+        str(t.pnl_currency).upper() for t in trades if getattr(t, "pnl_currency", None)
+    }
+    missing_currency = sum(1 for t in trades if not getattr(t, "pnl_currency", None))
+    if len(currencies) > 1 or (currencies and missing_currency):
+        raise ValueError(
+            "交易紀錄含不同或不明的 pnl_currency，金額不可直接相加；"
+            "請先依同一帳戶/結算幣別分開分析。"
+        )
+    if len(currencies) == 1:
+        m.pnl_currency = next(iter(currencies))
+    elif not currencies:
+        inferred = {
+            currency
+            for t in trades
+            if (currency := infer_pnl_currency(t.symbol, t.market))
+        }
+        unresolved = sum(
+            1 for t in trades if not infer_pnl_currency(t.symbol, t.market)
+        )
+        if len(inferred) > 1 or (inferred and unresolved):
+            shown = "、".join(sorted(inferred)) or "未知"
+            raise ValueError(
+                f"交易紀錄未明示 pnl_currency，依商品推定出多種或不明幣別（{shown}；"
+                f"不明 {unresolved} 筆），金額不可直接相加。"
+            )
+        m.currency_reliable = False
+        if len(inferred) == 1:
+            m.pnl_currency = next(iter(inferred))
+            m.currency_note = (
+                f"損益幣別僅依商品推定為 {m.pnl_currency}，未確認帳戶實際結算幣別；"
+                "不可據此進入真錢驗證階段。"
+            )
+        else:
+            m.currency_note = "損益幣別不明；不可和其他帳戶/市場金額合併。"
 
     win_pnls = [p for p in pnls if p > 0]
     loss_pnls = [p for p in pnls if p < 0]
@@ -180,34 +291,59 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
     max_dd = 0.0
     max_dd_pct = 0.0
     running_capital = 0.0
-    for t, p in zip(trades, pnls):
-        running_capital = max(running_capital, t.contract_value)
-        equity += p
-        peak = max(peak, equity)
-        dd = peak - equity
-        if dd > max_dd:
-            max_dd = dd
-        denom_now = running_capital + peak  # 當下帳戶能動用的高水位
-        if denom_now > 0:
-            dd_pct = dd / denom_now
-            if dd_pct > max_dd_pct:
-                max_dd_pct = dd_pct
+    if m.sequence_metrics_reliable:
+        for t, p in zip(trades, pnls):
+            running_capital = max(running_capital, t.contract_value)
+            equity += p
+            peak = max(peak, equity)
+            dd = peak - equity
+            if dd > max_dd:
+                max_dd = dd
+            denom_now = running_capital + peak  # 當下帳戶能動用的高水位
+            if denom_now > 0:
+                dd_pct = dd / denom_now
+                if dd_pct > max_dd_pct:
+                    max_dd_pct = dd_pct
+    else:
+        # 具體原因已在排序守門處寫入 sequence_note。
+        pass
     m.max_drawdown = max_dd
     m.max_drawdown_pct = max_dd_pct
     # pnl-only 資料(無進場價/數量)沒有資本基準:金額算得出、百分比算不出。
     # 標記不可靠,顯示層要說「無法計算」而不是印一個假的 0%。
-    m.drawdown_pct_reliable = running_capital > 0
+    m.drawdown_pct_reliable = (
+        m.sequence_metrics_reliable
+        and m.return_metrics_reliable
+        and running_capital > 0
+        and not any(
+            is_leveraged(t.market)
+            or t.market == Market.CRYPTO
+            or t.side == Side.SHORT
+            for t in trades
+        )
+    )
+    if (
+        m.sequence_metrics_reliable
+        and m.return_metrics_reliable
+        and running_capital > 0
+        and not m.drawdown_pct_reliable
+    ):
+        m.drawdown_note = (
+            "紀錄含放空、期貨、選擇權、外匯或無法確認是否加槓桿的加密商品；"
+            "契約名目價值不等於帳戶權益/保證金，因此帳戶回撤百分比無法計算。"
+        )
 
     # ── 最長連續虧損 ──
-    streak = 0
-    longest = 0
-    for p in pnls:
-        if p < 0:
-            streak += 1
-            longest = max(longest, streak)
-        else:
-            streak = 0
-    m.max_consecutive_losses = longest
+    if m.sequence_metrics_reliable:
+        streak = 0
+        longest = 0
+        for p in pnls:
+            if p < 0:
+                streak += 1
+                longest = max(longest, streak)
+            else:
+                streak = 0
+        m.max_consecutive_losses = longest
 
     # ── 夏普 / 索提諾(以每筆交易報酬率計算,非年化)──
     # 注意:這是「每筆交易」口徑,非年化。不同交易頻率的策略不可直接互比,
@@ -226,13 +362,41 @@ def compute_metrics(log: TradeLog) -> PerformanceMetrics:
         dvar = sum(min(r, 0.0) ** 2 for r in returns) / (n - 1)
         dstd = math.sqrt(dvar)
         m.sortino = _ratio(mean_ret, dstd)
+    if not m.return_metrics_reliable:
+        m.return_note = (
+            "至少一筆交易缺少可信的進場價、數量或契約乘數，"
+            "或損益幣別與名目本金幣別不一致；"
+            "報酬率、夏普、索提諾與回撤百分比無法計算。"
+        )
 
     # ── 交易風格 ──
-    holding = [t.holding_days for t in trades]
+    timing_known = [
+        t for t in trades
+        if t.entry_time_known
+        and t.exit_time_known
+        and getattr(t, "time_basis_consistent", True)
+    ]
+    m.timing_known_trades = len(timing_known)
+    m.timing_unknown_trades = len(trades) - len(timing_known)
+    m.timing_data_complete = m.timing_unknown_trades == 0
+    m.timing_metrics_available = bool(timing_known)
+    holding = [t.holding_days for t in timing_known]
+    holding = [days for days in holding if days is not None]
     m.avg_holding_days = _safe_div(sum(holding), len(holding))
-    # 當沖判定統一用 Trade.is_day_trade(同一交易日),與成本估算口徑一致
-    intraday_count = sum(1 for t in trades if t.is_day_trade)
-    # >=:恰好 70% 當沖也算「以當沖為主」(文件口徑「超過七成」含臨界)
-    m.is_mostly_intraday = _safe_div(intraday_count, len(trades)) >= INTRADAY_RATIO_THRESHOLD
+    # 當沖判定統一用 Trade.is_day_trade(同一交易日),與成本估算口徑一致。
+    # 分母也只能是雙時間已知的交易，不得把缺時間當成「非當沖」或「當沖」。
+    intraday_count = sum(1 for t in timing_known if t.is_day_trade)
+    m.intraday_ratio = _safe_div(intraday_count, len(timing_known))
+    # 只有時間完整才能對整份紀錄下「以當沖為主」的判斷。
+    m.is_mostly_intraday = (
+        m.timing_data_complete
+        and m.timing_metrics_available
+        and m.intraday_ratio >= INTRADAY_RATIO_THRESHOLD
+    )
+    if not m.timing_data_complete:
+        m.timing_note = (
+            f"僅 {m.timing_known_trades}/{m.total_trades} 筆同時有進出場時間;"
+            "平均持倉與當沖比例只來自已知子集,不對整體判定當沖風格。"
+        )
 
     return m

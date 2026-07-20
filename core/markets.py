@@ -48,8 +48,14 @@ MARKET_SPECS: dict[Market, MarketSpec] = {
                                   "乘數必須查白名單;查不到不可自動估成本"),
     Market.TW_OPTIONS: MarketSpec(Market.TW_OPTIONS, "口", True, 1.0,
                                   "賣方風險左尾極厚,樣本內可能完全看不到爆倉"),
-    Market.FOREX: MarketSpec(Market.FOREX, "手", True, 1.0,
-                             "隔夜利息(swap)可正可負,本工具未建模"),
+    Market.FOREX: MarketSpec(
+        Market.FOREX,
+        "基礎貨幣單位",
+        True,
+        1.0,
+        "數量必須填 base units，不能把手數直接當數量；"
+        "隔夜利息(swap)可正可負,本工具未建模",
+    ),
     Market.UNKNOWN: MarketSpec(Market.UNKNOWN, "單位", False, 1.0),
 }
 
@@ -60,12 +66,29 @@ SYMBOL_MULTIPLIERS: dict[str, float] = {
     # 台灣期貨(台指期系列)
     "TXF": 200.0,   # 大台
     "MXF": 50.0,    # 小台
+    "MX1": 50.0,    # 週小台 W1
+    "MX2": 50.0,    # 週小台 W2
+    "MX4": 50.0,    # 週小台 W4
+    "MX5": 50.0,    # 週小台 W5
     "TMF": 10.0,    # 微台
     "EXF": 4000.0,  # 電子期
     "FXF": 1000.0,  # 金融期
     # 台灣選擇權(權利金點數 × 50)
     "TXO": 50.0,
+    "TX1": 50.0,    # 週三到期 W1
+    "TX2": 50.0,    # 週三到期 W2
+    "TX4": 50.0,    # 週三到期 W4
+    "TX5": 50.0,    # 週三到期 W5
+    "TXU": 50.0,    # 週五到期 F1
+    "TXV": 50.0,    # 週五到期 F2
+    "TXX": 50.0,    # 週五到期 F3
+    "TXY": 50.0,    # 週五到期 F4
+    "TXZ": 50.0,    # 週五到期 F5
 }
+
+_TW_OPTION_PREFIXES = frozenset({
+    "TXO", "TX1", "TX2", "TX4", "TX5", "TXU", "TXV", "TXX", "TXY", "TXZ",
+})
 
 # 台灣期貨/選擇權代號 = 白名單前綴 + 契約月份碼(必須含數字)。
 # 例:TXFG5(月份碼 G + 年碼 5)、TXF202607(年月)、TXO18000G5(履約價 + 月份碼)。
@@ -79,7 +102,11 @@ _TW_DERIV_PATTERN = re.compile(
 ISO_CCY = frozenset({
     "USD", "EUR", "JPY", "GBP", "AUD", "NZD", "CAD", "CHF",
     "CNY", "CNH", "HKD", "SGD", "TWD", "KRW", "SEK", "NOK",
-    "MXN", "ZAR", "TRY", "PLN",
+    "MXN", "ZAR", "TRY", "PLN", "AED", "ARS", "BGN", "BHD",
+    "BRL", "CLP", "COP", "CZK", "DKK", "EGP", "HUF", "IDR",
+    "ILS", "INR", "ISK", "JOD", "KES", "KWD", "MAD", "MYR",
+    "NGN", "OMR", "PHP", "PKR", "QAR", "RON", "RUB", "SAR",
+    "THB", "VND", "XAG", "XAU",
 })
 
 # 加密貨幣的計價幣(用於區分 BTCUSDT 這種代號)
@@ -98,7 +125,9 @@ _BARE_COINS = frozenset({"BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB"})
 _FOREX_PAIR = re.compile(r"^([A-Z]{3})([A-Z]{3})$")
 _TW_ETF = re.compile(r"^00\d{2,4}[A-Z]?$")      # 0050, 0056, 00878...
 _TW_STOCK = re.compile(r"^\d{4,6}[A-Z]?$")
-_US_STOCK = re.compile(r"^[A-Z]{1,5}$")
+# 美股類別股可含一碼 dot/hyphen 後綴(例如 BRK.B；部分資料源輸出 BRK-B)。
+# 加密貨幣的明確分隔格式已在前面先判斷,不會被這條較寬的規則劫持。
+_US_STOCK = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z])?$")
 
 
 def contract_multiplier(symbol: str) -> tuple[float, bool]:
@@ -138,10 +167,13 @@ def infer_market(symbol: str, hint: Market | None = None) -> Market:
     m_deriv = _TW_DERIV_PATTERN.match(s)
     if m_deriv:
         prefix = m_deriv.group(1)
-        return Market.TW_OPTIONS if prefix.endswith("O") else Market.TW_FUTURES
+        return Market.TW_OPTIONS if prefix in _TW_OPTION_PREFIXES else Market.TW_FUTURES
 
     # 2. 外匯:六碼且前三後三都是 ISO 貨幣(必須早於加密貨幣判斷)
-    m = _FOREX_PAIR.match(s)
+    # 券商常輸出 EUR/USD、EUR-USD、EUR_USD。只在去掉單一分隔符後
+    # 兩側都是已知法幣才視為 FX；BTC-USD 的 BTC 不在 ISO 集合，仍走加密。
+    forex_s = re.sub(r"[/_-]", "", s)
+    m = _FOREX_PAIR.match(forex_s)
     if m and m.group(1) in ISO_CCY and m.group(2) in ISO_CCY:
         return Market.FOREX
 
@@ -162,6 +194,27 @@ def infer_market(symbol: str, hint: Market | None = None) -> Market:
         return Market.US_STOCK
 
     return Market.UNKNOWN
+
+
+def infer_pnl_currency(symbol: str, market: Market | None = None) -> str | None:
+    """依商品推定常見損益幣別；使用者明示的帳戶幣別仍應優先。
+
+    這只用來阻止 TWD、USD、JPY 等金額被靜默相加，不做匯率換算。
+    """
+
+    s = str(symbol).strip().upper().replace("/", "").replace("-", "").replace("_", "")
+    mkt = market or infer_market(symbol)
+    if mkt in (Market.TW_STOCK, Market.TW_ETF, Market.TW_FUTURES, Market.TW_OPTIONS):
+        return "TWD"
+    if mkt == Market.US_STOCK:
+        return "USD"
+    if mkt == Market.FOREX and len(s) == 6:
+        return s[-3:]
+    if mkt == Market.CRYPTO:
+        for quote in ("USDT", "USDC", "BUSD", "DAI", "USD", "TWD", "EUR", "JPY", "BTC", "ETH", "BNB"):
+            if s.endswith(quote) and len(s) > len(quote):
+                return quote
+    return None
 
 
 def is_leveraged(market: Market) -> bool:

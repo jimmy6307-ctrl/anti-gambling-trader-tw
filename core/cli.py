@@ -120,6 +120,12 @@ def _compute_full_extras(result, equity):
     from .trend import analyze_trend
 
     trend_report = analyze_trend(result.log)
+    if not getattr(result.metrics, "currency_reliable", False):
+        return (
+            trend_report,
+            None,
+            "損益幣別未經確認，無法把 pnl 與起始權益放進同一情境模擬",
+        )
     pnls = [t.pnl or 0.0 for t in result.log]
     try:
         scenario = simulate_ruin_scenario(pnls, start_equity=equity)
@@ -203,13 +209,15 @@ def _cmd_demo(args) -> int:
 
 # 空白 CSV 範本:標準中文欄名 + 兩行範例 + 說明註解
 _TEMPLATE_CSV = """\
-代號,方向,進場時間,出場時間,進場價,出場價,數量,手續費,策略
+代號,方向,進場時間,出場時間,進場價,出場價,數量,手續費,損益,損益幣別,策略
 # 說明:把下面兩行範例換成你自己的交易。一列 = 一筆「已平倉」交易。
-# 方向填「買/做多」或「賣/做空」;時間可用 2025-01-03 或 2025/01/03。
+# 最簡單填法:填代號、出場時間、已扣全部成本的淨損益、損益幣別、策略；方向未知可留白。
+# 完整填法:填進場價、出場價、數量，損益可留白由工具計算。
+# 用價差推算時，方向必須填「買/做多」或「賣/做空」;時間可用 2025-01-03 或 2025/01/03。
 # 數量:台股可填股數;若你的欄位是「張」請改欄名為「張數」(會自動 ×1000)。
-# 手續費可留空(會自動估算);策略欄建議填你的進場理由,日後才能揪出哪招在送錢。
-2330,買,2025-01-03,2025-02-10,1000,1080,1000,,季線突破
-2317,買,2025-01-15,2025-01-15,210,205,2000,,聽明牌當沖
+# 只有用價量推算 pnl 時，手續費留空才會自動估算；直接 pnl 不重複扣費。
+2330,買,2025-01-03,2025-02-10,1000,1080,1000,,,TWD,季線突破
+2317,買,2025-01-15,2025-01-15,210,205,2000,,,TWD,聽明牌當沖
 """
 
 
@@ -229,12 +237,269 @@ def _cmd_init_template(args) -> int:
     return 0
 
 
+def _cmd_start(_args) -> int:
+    """只呈現四條最短路徑，避免新手先讀完整參數表。"""
+
+    print(
+        """\
+==============================================================
+                   反詐投資王｜從這裡開始
+==============================================================
+你現在手上有什麼？依情況複製下面一條命令：
+
+  1. 有完整交易紀錄
+     anti-gambling-trader fit-check 你的交易.csv
+
+  2. 沒有表格，想從今天開始逐筆記
+     anti-gambling-trader record
+
+  3. 有券商或圖表截圖
+     anti-gambling-trader scan-screenshot 截圖.png
+
+  4. 有 LINE 群組對話或可疑投資訊息
+     anti-gambling-trader scan-text --file LINE對話.txt
+
+安全底線：沒有至少 30 筆完整、連續、未挑選的已平倉紀錄前，
+本工具只會建議紙上模擬，不會認證你「適合投入真錢」。
+"""
+    )
+    return 0
+
+
+def _cmd_record(args) -> int:
+    """逐筆新增交易；沒有帶參數時進入五個短問題的互動輸入。"""
+
+    from .onboarding import (
+        append_beginner_row,
+        build_beginner_row,
+        prompt_beginner_row,
+    )
+
+    try:
+        if args.symbol:
+            row = build_beginner_row(
+                symbol=args.symbol,
+                pnl=args.pnl,
+                side=args.side,
+                entry_time=args.entry_time,
+                exit_time=args.exit_time,
+                entry_price=args.entry_price,
+                exit_price=args.exit_price,
+                quantity=args.quantity,
+                fees=args.fees,
+                currency=args.currency,
+                strategy=args.strategy,
+            )
+        else:
+            row = prompt_beginner_row()
+        out, count = append_beginner_row(args.out, row)
+    except (ValueError, OSError, EOFError, KeyboardInterrupt) as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"✅ 已記錄第 {count} 筆已平倉交易: {out}")
+    out_arg = f'"{out}"' if any(ch.isspace() for ch in str(out)) else str(out)
+    if not row.get("策略"):
+        print("  提醒:這筆沒有進場理由；工具之後無法辨識是哪套交易方法。")
+    if count < 30:
+        print(f"  還差 {30 - count} 筆才到最低判讀門檻；現在不要用勝率判斷自己有沒有本事。")
+        print("  繼續記錄: anti-gambling-trader record --out " + out_arg)
+    else:
+        print("  已達最低筆數，可執行: anti-gambling-trader fit-check " + out_arg)
+    return 0
+
+
+def _cmd_fit_check(args) -> int:
+    """用實際紀錄做快速階段分流，不用自我感覺問卷。"""
+
+    from .onboarding import render_stage, stage_from_analysis
+
+    target = args.file
+    market_hint = Market(args.market) if args.market else None
+    if args.example:
+        target, market_hint = _example_path(args.example)
+    if not target:
+        print(
+            "請提供交易紀錄，例如: anti-gambling-trader fit-check my_trades.csv\n"
+            "還沒有紀錄?先執行 anti-gambling-trader record。",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = analyze_file(
+            target,
+            market_hint=market_hint,
+            n_bootstrap=args.bootstrap,
+        )
+    except (ValueError, FileNotFoundError, ImportError) as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
+    assessment = stage_from_analysis(result)
+    print(render_stage(assessment))
+    print(
+        f"\n核心依據: {result.metrics.total_trades} 筆 / "
+        f"每筆期望值 {result.metrics.expectancy:,.2f} / "
+        f"裁決 {result.verdict.level.value}"
+    )
+    target_arg = f'"{target}"' if any(ch.isspace() for ch in str(target)) else str(target)
+    print(f"完整體檢: anti-gambling-trader analyze {target_arg} --full --equity 你的本金")
+    return assessment.exit_code
+
+
+def _cmd_scan_screenshot(args) -> int:
+    """辨識截圖中的交易欄位與策略文字線索；低信心值絕不自動採用。"""
+
+    from .ingest.beginner import build_beginner_form, build_review_questions
+    from .ingest.screenshot import (
+        OCRUnavailableError,
+        STRATEGY_NOTICE,
+        parse_ocr_text,
+        parse_screenshot_image,
+    )
+
+    supplied = [bool(args.image), bool(args.text_file), args.text is not None]
+    if sum(supplied) != 1:
+        print(
+            "錯誤:請擇一提供圖片、--text-file OCR文字檔，或 --text OCR文字。",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        if args.image:
+            result = parse_screenshot_image(
+                args.image,
+                language=args.language,
+                acceptance_threshold=args.threshold,
+            )
+        else:
+            text_input = args.text
+            if args.text_file:
+                text_input = _read_file_text(args.text_file)
+                if text_input is None:
+                    return 1
+            result = parse_ocr_text(
+                text_input or "",
+                acceptance_threshold=args.threshold,
+                source=(f"text:{Path(args.text_file).name}" if args.text_file else "inline_text"),
+            )
+    except (ValueError, FileNotFoundError, OCRUnavailableError) as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        if args.image and isinstance(exc, OCRUnavailableError):
+            print(
+                "替代方式:先用手機/系統 OCR 複製文字，再執行 "
+                "anti-gambling-trader scan-screenshot --text \"貼上的文字\"。",
+                file=sys.stderr,
+            )
+        return 1
+
+    form = build_beginner_form(result)
+    print("=" * 66)
+    print("                 交易截圖辨識｜逐欄覆核")
+    print("=" * 66)
+    print("【可先帶入的候選】（仍要對照原圖，不會自動存成交易）")
+    safe_fields = [field for field in form if field.status == "auto_filled"]
+    if safe_fields:
+        unit_labels = {
+            "share": "股", "lot": "張", "contract": "口", "asset": "幣/單位",
+            "quantity": "單位", "currency": "元/帳戶幣別", "percent": "%",
+            "price": "", "datetime": "",
+        }
+        for field in safe_fields:
+            shown_value = {"long": "做多", "short": "做空"}.get(
+                str(field.value), field.value
+            )
+            localized_unit = unit_labels.get(field.unit or "", field.unit or "")
+            unit = f" {localized_unit}" if localized_unit else ""
+            print(f"  • {field.label}: {shown_value}{unit}")
+            print(f"      證據: {field.evidence}")
+    else:
+        print("  沒有足夠可靠的欄位可先帶入。")
+
+    review = build_review_questions(result)
+    if review:
+        print("\n【需要你確認】")
+        for index, question in enumerate(review, 1):
+            required = "必填" if question.required else "建議"
+            print(f"  {index}. [{required}] {question.prompt}")
+            print(f"      為什麼要問: {question.reason}")
+
+    print("\n【交易技術文字線索】")
+    if result.strategy_clues:
+        for clue in result.strategy_clues:
+            print(f"  • {clue.label}:「{clue.evidence}」")
+    else:
+        print("  沒有辨識到可解釋的技術文字；不能只看圖形替你猜策略。")
+    print(f"  注意: {STRATEGY_NOTICE}")
+
+    if result.warnings:
+        print("\n【辨識警告】")
+        for warning in result.warnings:
+            print(f"  • {warning}")
+    print("\n單張截圖不能證明你適合交易，也不能驗證績效；請保留完整連續紀錄。")
+    print(
+        "確認原圖後，可用這些已核對值執行 anti-gambling-trader record；"
+        "不要直接把 OCR JSON 當成已確認交易。"
+    )
+
+    if args.json:
+        payload = {
+            "source": result.source,
+            "needs_manual_review": result.needs_manual_review,
+            "requires_human_review": result.requires_human_review,
+            "missing_required_fields": list(result.missing_required_fields),
+            "safe_fields": {
+                name: {
+                    "value": candidate.candidate_value,
+                    "unit": candidate.unit,
+                    "confidence": candidate.confidence,
+                    "evidence": candidate.evidence,
+                    "derived": candidate.derived,
+                }
+                for name, candidate in result.selected_fields.items()
+            },
+            "review_questions": [
+                {
+                    "field": question.field,
+                    "prompt": question.prompt,
+                    "reason": question.reason,
+                    "required": question.required,
+                    "choices": list(question.choices),
+                }
+                for question in review
+            ],
+            "strategy_clues": [
+                {
+                    "code": clue.code,
+                    "label": clue.label,
+                    "evidence": clue.evidence,
+                    "confidence": clue.confidence,
+                }
+                for clue in result.strategy_clues
+            ],
+            "warnings": list(result.warnings),
+            "strategy_notice": STRATEGY_NOTICE,
+            "confidence_notice": (
+                "confidence 是文字抽取規則分數，不是 OCR 正確率、"
+                "策略勝率或詐騙機率。"
+            ),
+        }
+        Path(args.json).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        print(f"[已輸出待覆核 JSON] {args.json}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="anti-gambling-trader",
         description="反詐投資王 — 用統計學判斷你的交易是優勢還是賭博",
     )
     sub = p.add_subparsers(dest="command", required=True)
+
+    # ── start:新手唯一入口 ──
+    sub.add_parser("start", help="第一次使用?依你手上的資料選最短路徑")
 
     a = sub.add_parser("analyze", help="分析一份交易紀錄")
     a.add_argument("file", nargs="?", help="交易紀錄檔(.csv / .json / .xlsx)")
@@ -279,7 +544,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     a.add_argument(
         "--equity", type=float, default=None,
-        help="起始權益,供 --full 的風險情境模擬;未給則粗估並醒目警示",
+        help="起始權益（必須與損益同幣別）,供 --full 風險情境模擬;未給則粗估",
     )
     a.add_argument(
         "--bootstrap", type=int, default=5000, help="bootstrap 重抽次數(預設 5000)"
@@ -348,6 +613,54 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", default="trades_template.csv", help="範本輸出路徑"
     )
 
+    # ── record:不開試算表也能逐筆記錄 ──
+    rec = sub.add_parser("record", help="五個短問題新增一筆已平倉交易(新手推薦)")
+    rec.add_argument("--out", default="my_trades.csv", help="要新增到哪個 CSV")
+    rec.add_argument("--symbol", help="標的代號；省略時進入互動輸入")
+    rec.add_argument(
+        "--pnl",
+        help="同一帳戶幣別、已扣手續費/稅/滑價的已實現淨損益",
+    )
+    rec.add_argument(
+        "--side",
+        default=None,
+        help="買/做多 或 賣/做空；direct net pnl 可留白，價差推算必填",
+    )
+    rec.add_argument("--entry-time", help="進場時間")
+    rec.add_argument("--exit-time", help="出場/平倉時間")
+    rec.add_argument("--entry-price", help="進場價")
+    rec.add_argument("--exit-price", help="出場價")
+    rec.add_argument("--quantity", help="數量(台股請填股數)")
+    rec.add_argument("--fees", help="此筆總手續費與稅")
+    rec.add_argument("--currency", help="損益/帳戶幣別，例如 TWD、USD、JPY")
+    rec.add_argument("--strategy", default="", help="當時的進場理由，不要事後美化")
+
+    # ── fit-check:用紀錄做 30 秒階段分流 ──
+    fit = sub.add_parser(
+        "fit-check", help="快速判斷目前只適合停手、紙上模擬或極小額驗證"
+    )
+    fit.add_argument("file", nargs="?", help="交易紀錄檔(.csv/.json/.xlsx)")
+    fit.add_argument("--example", choices=["tw", "us", "crypto"], help="使用內建範例")
+    fit.add_argument(
+        "--market", choices=[m.value for m in Market], default=None,
+        help="若整份紀錄屬同一市場才指定",
+    )
+    fit.add_argument("--bootstrap", type=int, default=5000, help="bootstrap 重抽次數")
+
+    # ── scan-screenshot:圖片 OCR / OCR 文字的保守式欄位辨識 ──
+    shot = sub.add_parser(
+        "scan-screenshot", help="辨識交易截圖的點位、數量、損益與技術文字線索"
+    )
+    shot.add_argument("image", nargs="?", help="券商/圖表截圖路徑")
+    shot.add_argument("--text-file", help="已由手機或系統 OCR 匯出的文字檔")
+    shot.add_argument("--text", help="直接貼入 OCR 文字")
+    shot.add_argument("--language", default="chi_tra+eng", help="Tesseract 語言")
+    shot.add_argument(
+        "--threshold", type=float, default=0.80,
+        help="自動帶入候選的規則門檻 0.80~1（只能調高；仍需人工覆核）",
+    )
+    shot.add_argument("--json", metavar="PATH", help="輸出供介面使用的待覆核 JSON")
+
     # ── scan-text:詐騙話術文字偵測 ──
     st = sub.add_parser(
         "scan-text", help="貼上群組對話 / 廣告文案,掃描詐騙話術特徵"
@@ -398,7 +711,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rs.add_argument("file", nargs="?", help="交易紀錄檔")
     rs.add_argument("--example", choices=["tw", "us", "crypto"], help="用內建範例")
-    rs.add_argument("--equity", type=float, help="起始權益(未給則粗估)")
+    rs.add_argument(
+        "--equity", type=float,
+        help="起始權益（必須與交易損益同幣別；未給則粗估）",
+    )
     rs.add_argument("--future-trades", type=int, default=200, help="模擬未來幾筆")
     rs.add_argument("--paths", type=int, default=5000, help="模擬幾條路徑")
 
@@ -413,6 +729,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     _force_utf8_stdout()
     args = _build_parser().parse_args(argv)
+
+    if args.command == "start":
+        return _cmd_start(args)
 
     if args.command == "analyze":
         # 決定要分析哪個檔案:--example 範例 > 指定檔案 > 無檔案導流
@@ -472,6 +791,10 @@ def main(argv: list[str] | None = None) -> int:
             print(_render_trend(trend_report))
             print()
             if scenario is not None:
+                print(
+                    f"  情境模擬幣別: {result.metrics.pnl_currency};"
+                    " --equity 必須使用同一幣別。"
+                )
                 print(_render_scenario(scenario))
                 if scenario.start_equity_inferred:
                     print(
@@ -542,6 +865,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init-template":
         return _cmd_init_template(args)
+
+    if args.command == "record":
+        return _cmd_record(args)
+
+    if args.command == "fit-check":
+        return _cmd_fit_check(args)
+
+    if args.command == "scan-screenshot":
+        return _cmd_scan_screenshot(args)
 
     if args.command == "scaffold":
         return _cmd_scaffold(args)
@@ -743,6 +1075,20 @@ def _cmd_risk_sim(args) -> int:
         print("請提供交易紀錄檔,或用 --example tw|us|crypto", file=sys.stderr)
         return 1
 
+    from .metrics.performance import compute_metrics
+
+    try:
+        metrics = compute_metrics(log)
+    except ValueError as exc:
+        print(f"錯誤: {exc}", file=sys.stderr)
+        return 1
+    if not metrics.currency_reliable:
+        print(
+            "錯誤:損益幣別未經確認，無法把 pnl 與 --equity 放進同一情境模擬。",
+            file=sys.stderr,
+        )
+        return 1
+
     pnls = [t.pnl or 0.0 for t in log]
     try:
         s = simulate_ruin_scenario(
@@ -758,6 +1104,7 @@ def _cmd_risk_sim(args) -> int:
     if s is None:
         print("交易筆數太少(< 10),無法做有意義的情境模擬。", file=sys.stderr)
         return 1
+    print(f"情境模擬幣別: {metrics.pnl_currency}; --equity 必須使用同一幣別。")
     print(render_scenario(s))
     return 2 if s.ruin_fraction > 0.1 else 0
 
@@ -785,15 +1132,19 @@ def _cmd_scaffold(args) -> int:
     from .ingest.loader import infer_market
 
     verdict = None
+    stage = None
     inferred_market = None
     inferred_symbols = None
     if args.from_analysis:
         try:
             result = analyze_file(args.from_analysis)
             verdict = result.verdict
+            from .onboarding import stage_from_analysis
+            stage = stage_from_analysis(result)
             print(f"[已分析交易紀錄] 裁決:{verdict.headline}")
-            if verdict.should_discourage:
-                print("  → 專案將預設禁用真實下單,逼你先把策略驗證好。\n")
+            print(f"  → 交易階段:{stage.title}")
+            if stage.code != "tiny_live_validation":
+                print("  → 專案將禁用真實下單，先完成該階段要求。\n")
             # 從分析結果繼承市場與標的,使用者連 --market --symbols 都能省
             markets = [m for m in result.log.markets if m != Market.UNKNOWN]
             if markets:
@@ -829,6 +1180,7 @@ def _cmd_scaffold(args) -> int:
         market=market,
         symbols=symbols or ["AAPL"],
         verdict=verdict,
+        stage=stage,
     )
     try:
         root = write_project(opts, args.out)

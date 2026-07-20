@@ -22,8 +22,14 @@ and a guru-claim probability checker. Pure Python stdlib, all analysis stays loc
 
 如果你沒裝過 Python、沒用過終端機、也沒用過 AI，請看
 **[新手快速上手指南 docs/quickstart.md](docs/quickstart.md)** ——
-它從「怎麼裝 Python、怎麼打開終端機」開始，一步一步帶你在 15 分鐘內上手，
-還教你怎麼用 AI（Claude Code）用講話的方式操作這個工具。
+它從「怎麼裝 Python、怎麼打開終端機」開始，一步一步帶你上手。安裝後先打：
+
+```bash
+anti-gambling-trader start
+```
+
+畫面會依「完整紀錄、單筆交易、交易截圖，還是 LINE 對話」列出最短命令。
+沒有試算表也能用 `record` 的五個短問題記一筆交易。
 
 ## 🛡 這個工具的反詐使命
 
@@ -74,6 +80,10 @@ anti-gambling-trader scam-check
 - **反詐偵測**：把「聽老師 / 跟單」的交易單獨抽出算期望值 —— 用你自己的數字檢驗跟單到底賺不賺
 - **風險情境模擬**：用你的損益分布模擬未來，看有多少比例的路徑會爆倉
 - **時間趨勢**：月報、優勢衰減偵測（「你最近三個月期望值轉負」）
+- **LINE 對話掃描**：理解 LINE 匯出標頭與跨訊息話術，顯示發言者、時間、原句與理由
+- **交易截圖覆核**：OCR 擷取進出場點位、數量、時間、損益、停損/停利；低信心不自動填
+- **交易技術線索**：辨識突破、均線、RSI、MACD 等畫面文字，但不把線索冒充成策略優勢
+- **新手階段分流**：用完整交易紀錄判斷目前只適合停手、紙上模擬或極小額驗證
 - **HTML 報告 + 分享圖卡**：可存檔、可截圖傳給家人的白紙黑字數據
 - 反推你的交易邏輯，產生 **可回測的策略骨架**（backtrader / vectorbt / 通用）
 - 若判定**不適合長期投資，明確勸退**
@@ -98,6 +108,7 @@ pip install -e .            # 安裝本體（之後可用 anti-gambling-trader �
 
 # 以下為可選依賴：
 # pip install openpyxl       # 只有要讀 Excel (.xlsx) 才需要
+# pip install -e ".[screenshot]"  # 圖片 OCR；另需安裝 Tesseract 與繁中字庫
 # pip install backtrader     # 只有要實際跑回測骨架才需要（或 vectorbt）
 ```
 
@@ -107,17 +118,32 @@ macOS / Linux 若 `python` 指到 Python 2，請改用 `python3`。
 ## 快速開始（30 秒上手）
 
 ```bash
-# 0. 還沒有自己的資料？一行指令立刻看效果：
+# 0. 第一次使用：依你手上的資料顯示最短路徑
+python -m core.cli start
+
+# 1. 沒有表格也能逐筆記錄（五個短問題）
+python -m core.cli record
+
+# 2. 用完整紀錄快速判斷目前適合哪個階段
+python -m core.cli fit-check my_trades.csv
+
+# 3. 掃描 LINE 對話紀錄
+python -m core.cli scan-text --file LINE對話.txt
+
+# 4. 辨識交易截圖；低信心欄位一定要求人工確認
+python -m core.cli scan-screenshot 券商截圖.png
+
+# 5. 還沒有自己的資料？一行指令立刻看效果：
 python -m core.cli demo               # 看「賭博型」範例
 python -m core.cli demo --edge        # 看「具優勢」範例
 
-# 1. 不知道資料格式？產生一份空白範本照填：
+# 6. 想用 Excel？產生範本；最簡單只填代號、平倉日、損益、策略
 python -m core.cli init-template      # 產生 trades_template.csv
 
-# 2. 分析你自己的資料（市場會自動推斷）：
+# 7. 查看完整統計報告（市場會自動推斷）：
 python -m core.cli analyze 你的交易.csv
 
-# 3. 欄位自動辨識失敗？手動指定對應：
+# 8. 欄位自動辨識失敗？手動指定對應：
 python -m core.cli analyze 你的交易.csv --field symbol=代號 --field entry_price=買價
 
 # 進階：輸出 JSON 結果與策略骨架
@@ -126,24 +152,33 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
 
 裝好本體後，上面的 `python -m core.cli` 都可換成更短的 `anti-gambling-trader`。
 
+> 截圖辨識只擷取「候選欄位」與文字線索，不會自動存入交易紀錄。OCR 可能看錯
+> 正負號、小數點與買賣方向，必須逐欄對照原圖；單張截圖也不能證明績效或交易能力。
+
 > Windows 終端機若中文 / emoji 顯示異常：PowerShell 先執行 `$env:PYTHONUTF8=1` 再跑指令；
 > macOS / Linux 則在指令前面加 `PYTHONUTF8=1`。
 
 ## 輸入格式
 
 欄位名稱**中英皆可、會自動辨識**。最少需要能算出每筆損益的資訊：
-（代號 + 進場價 + 出場價 + 數量）或（代號 + 損益）。
+（代號 + 方向 + 進場價 + 出場價 + 數量）或
+（代號 + 已扣全部成本的淨損益 + 帳戶結算幣別）。
 
 | 標準欄位 | 可接受的欄名（部分範例） | 必要性 |
 |----------|--------------------------|--------|
 | symbol | 代號 / ticker / 股票代號 / pair | 必要 |
-| side | 方向 / 買賣 / side / long_short | 選填（預設做多） |
+| side | 方向 / 買賣 / side / long_short | 價量推算必填；direct pnl 可缺但不判方向偏好 |
 | entry_time / exit_time | 進場時間 / 出場時間 / open_time | 建議 |
 | entry_price / exit_price | 進場價 / 出場價 / 買價 / 賣價 | 與 pnl 二擇一 |
 | quantity | 數量 / 股數 / 張數 / qty | 與 pnl 二擇一 |
-| fees | 手續費 / 費用 / commission | 選填（未填則自動估算） |
-| pnl | 損益 / 盈虧 / 已實現損益 / profit | 與價格二擇一 |
+| fees | 交易成本 / total_fee，或完整手續費＋稅 | 價量推算時未填才估算；direct net pnl 不重複扣 |
+| pnl | pnl / 損益 / net_pnl / 淨損益 | 與價格二擇一；標準欄位契約為已扣所有成本的淨額 |
+| pnl_currency | 損益幣別 / 帳戶幣別 | direct pnl 必填；價量推算才可依商品原生幣別判定 |
 | tag | 策略 / strategy / 進場理由 | 選填（強烈建議） |
+
+> `盈虧`、`已實現損益`、`realized_pnl` 的 gross/net 語意不明，工具會要求改成
+> 明示「淨」的欄名，或用 `--field pnl=你的欄名` 親自確認。`profit` 等 gross 欄
+> 只有在同列提供可信的 `total_fee/交易成本` 時才會扣成本後載入。
 
 > **建議務必填 `tag`（策略標籤）**：工具會分別計算每套邏輯的勝率，
 > 幫你看出「到底是哪一招真的有效、哪一招只是在送錢」。
@@ -216,7 +251,8 @@ cd my_bot && pip install -r requirements.txt && python main.py
 2. **真實下單安全閘門**：真實券商的下單會被攔截，除非你親手呼叫
    `confirm_live_trading(i_understand_the_risk=True)`，且 `main.py` 的
    `ALLOW_LIVE_TRADING` 改為 `True`。
-3. **裁決連動**：若你的交易紀錄被判定為賭博，產出專案會**預設禁用真實下單**。
+3. **完整階段連動**：不是只看樣本內裁決；只有樣本外延續、幣別與風險基準都可靠，
+   且分流結果為 `tiny_live_validation` 時，設定檔才可能顯示 live 可用。其餘情況一律 `false`。
 
 > 本工具產生程式碼協助你，但**絕不替你用真錢下單、不替你填金鑰、不替你解除安全閘門**。
 > 真實金融交易必須由你自己操作並負全部責任。把未經驗證的賭博自動化，只會賠得更快。
@@ -228,7 +264,7 @@ core/
   models.py            # 統一資料模型（Trade / TradeLog，含契約乘數）
   markets.py           # 市場規格：契約乘數白名單、代號辨識、槓桿標註
   analyzer.py          # 高階一行式進入點
-  cli.py               # 命令列介面（14 個指令）
+  cli.py               # 命令列介面（18 個指令）
   report.py            # 中文文字報告
   report_html.py       # HTML 報告 + 分享圖卡（XSS 安全、自包含）
   ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 各市場成本模型
@@ -246,7 +282,7 @@ core/
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 13 個測試檔，212 個測試
+tests/                 # 18 個測試檔，339 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -272,6 +308,12 @@ python tests/test_skill_round.py
 python tests/test_round7.py
 python tests/test_round8.py
 python tests/test_round9.py
+python tests/test_round10.py
+python tests/test_line_antiscam.py
+python tests/test_missing_time_semantics.py
+python tests/test_onboarding.py
+python tests/test_screenshot_ingest.py
+python tests/test_trade_logic_audit.py
 ```
 
 ## 作者
@@ -281,7 +323,7 @@ python tests/test_round9.py
 > 誠實聲明：上列署名為社群化名，「好棒棒反詐協會」**不是**立案法人或
 > 官方組織。本專案的可信度不來自頭銜，來自：公開的原始碼、可重現的
 > 實驗（`experiments/`，固定 seed）、[方法論全文](docs/methodology.md)與
-> 212 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
+> 339 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
 > 做到的事。
 
 ## 授權

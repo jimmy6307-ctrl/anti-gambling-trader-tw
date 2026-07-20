@@ -64,14 +64,22 @@ class AnalysisResult:
 
     def as_dict(self) -> dict:
         from .metrics.breakeven import compute_break_even
+        from .onboarding import stage_from_analysis
 
         be = compute_break_even(self.metrics)
+        stage = stage_from_analysis(self)
         # 整包過 sanitize_json:inf 不只出現在 metrics(OOS 全勝區段、
         # per-tag 的 profit_factor 同樣會是 inf),單點防護會漏
         return sanitize_json({
             "source": self.log.source,
             "markets": sorted(m.value for m in self.log.markets),
             "verdict": self.verdict.as_dict(),
+            "stage": {
+                "code": stage.code,
+                "title": stage.title,
+                "reason": stage.reason,
+                "next_actions": list(stage.next_actions),
+            },
             "profile": self.profile.as_dict(),
             "out_of_sample": self.out_of_sample.as_dict(),
             # per-tag 為『描述統計』,刻意不含顯著性/優勢等級
@@ -123,6 +131,9 @@ def analyze_log(
     verdict = judge(log, metrics=metrics, n_bootstrap=n_bootstrap)
     profile = profile_strategy(log)
     oos = holdout_validate(log, n_bootstrap=n_bootstrap)
+    from .onboarding import stage_from_components
+
+    stage = stage_from_components(verdict=verdict, metrics=metrics, oos=oos)
 
     # 逐策略裁決 + 反事實 + 跟單抽算(實用性核心)
     tag_verdicts = per_tag_verdicts(log)
@@ -133,7 +144,7 @@ def analyze_log(
         log, metrics, verdict, profile, oos,
         tag_verdicts=tag_verdicts, counterfactual=counterfactual, follow_guru=guru,
     )
-    code = generate_skeleton(profile, verdict, framework=framework)
+    code = generate_skeleton(profile, verdict, framework=framework, stage=stage)
     return AnalysisResult(
         log=log,
         metrics=metrics,

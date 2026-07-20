@@ -26,7 +26,8 @@ and a guru-claim probability checker. Pure Python stdlib, all analysis stays loc
 If you have never installed Python, opened a terminal, or used AI, read the
 **[beginner quickstart guide docs/quickstart.md](docs/quickstart.md)** (in Traditional Chinese) —
 it starts from "how to install Python and open a terminal", walks you through step by step in about 15 minutes,
-and shows you how to operate this tool conversationally with AI (Claude Code).
+and starts with one command: `anti-gambling-trader start`. It routes you to a complete trade log,
+a four-step single-trade recorder, a trading screenshot, or a LINE chat export.
 
 ## 🛡 This tool's anti-fraud mission
 
@@ -82,6 +83,9 @@ Supports **Taiwan stocks / US stocks / crypto**, imports trade records from **CS
 - **Anti-fraud detection**: isolates the "guru-following / copy-trade" trades and computes their expectancy separately — testing with your own numbers whether following the calls actually pays
 - **Risk scenario simulation**: simulates future paths from your own P&L distribution to see what fraction of paths blow up the account
 - **Time trends**: monthly reports and edge-decay detection ("your expectancy turned negative in the last three months")
+- **LINE export scanning**: understands LINE headers and split messages while preserving speaker, time, evidence and reasons
+- **Screenshot review**: extracts trade points and technical-analysis text clues, but never auto-fills low-confidence OCR
+- **Beginner stage routing**: uses the full record to recommend stopping, paper trading, or at most tiny live validation
 - **HTML report + shareable card**: black-and-white numbers you can save, screenshot and send to family
 - Reverse-engineers your trading logic into a **backtestable strategy skeleton** (backtrader / vectorbt / generic)
 - If the verdict is **not suited to long-term investing, it explicitly talks you out of it**
@@ -106,6 +110,7 @@ pip install -e .            # 安裝本體（之後可用 anti-gambling-trader �
 
 # 以下為可選依賴：
 # pip install openpyxl       # 只有要讀 Excel (.xlsx) 才需要
+# pip install -e ".[screenshot]"  # image OCR; Tesseract + language data also required
 # pip install backtrader     # 只有要實際跑回測骨架才需要（或 vectorbt）
 ```
 
@@ -115,20 +120,33 @@ on macOS / Linux, if `python` points to Python 2, use `python3` instead.
 ## Quick start (30 seconds)
 
 ```bash
-# 0. 還沒有自己的資料？一行指令立刻看效果：
-python -m core.cli demo               # 看「賭博型」範例
-python -m core.cli demo --edge        # 看「具優勢」範例
+# 0. Show the shortest route for the data you already have
+python -m core.cli start
 
-# 1. 不知道資料格式？產生一份空白範本照填：
-python -m core.cli init-template      # 產生 trades_template.csv
+# 1. No spreadsheet: record one closed trade in five short prompts
+python -m core.cli record
 
-# 2. 分析你自己的資料（市場會自動推斷）：
-python -m core.cli analyze 你的交易.csv
+# 2. Get a conservative stage recommendation from a complete record
+python -m core.cli fit-check my_trades.csv
 
-# 3. 欄位自動辨識失敗？手動指定對應：
-python -m core.cli analyze 你的交易.csv --field symbol=代號 --field entry_price=買價
+# 3. Scan a LINE export or review fields extracted from a screenshot
+python -m core.cli scan-text --file LINE-chat.txt
+python -m core.cli scan-screenshot broker.png
 
-# 進階：輸出 JSON 結果與策略骨架
+# 4. No data yet? Preview both outcomes with bundled examples
+python -m core.cli demo               # gambling-like example
+python -m core.cli demo --edge        # statistical-edge example
+
+# 5. Prefer a spreadsheet? Create a blank template
+python -m core.cli init-template      # creates trades_template.csv
+
+# 6. Run the full analysis (market is inferred)
+python -m core.cli analyze your-trades.csv
+
+# 7. If column detection fails, map fields explicitly
+python -m core.cli analyze your-trades.csv --field symbol=ticker --field entry_price=buy_price
+
+# Advanced: export JSON and a strategy skeleton
 python -m core.cli analyze --example us --json result.json --strategy my_strategy.py
 ```
 
@@ -139,19 +157,26 @@ After installing the package, every `python -m core.cli` above can be replaced w
 
 ## Input format
 
-Column names are **auto-detected, in Chinese or English**. At minimum you need enough information to compute per-trade P&L:
-(symbol + entry price + exit price + quantity) or (symbol + pnl).
+Column names are **auto-detected, in Chinese or English**. At minimum you need either
+(symbol + side + entry price + exit price + quantity), or
+(symbol + net-of-costs P&L + account settlement currency).
 
 | Standard field | Accepted column names (partial examples) | Required? |
 |----------|--------------------------|--------|
 | symbol | 代號 / ticker / 股票代號 / pair | Required |
-| side | 方向 / 買賣 / side / long_short | Optional (defaults to long) |
+| side | 方向 / 買賣 / side / long_short | Required for price-derived P&L; may be absent for direct P&L, but no side profile is inferred |
 | entry_time / exit_time | 進場時間 / 出場時間 / open_time | Recommended |
 | entry_price / exit_price | 進場價 / 出場價 / 買價 / 賣價 | Either these or pnl |
 | quantity | 數量 / 股數 / 張數 / qty | Either these or pnl |
-| fees | 手續費 / 費用 / commission | Optional (estimated automatically if missing) |
-| pnl | 損益 / 盈虧 / 已實現損益 / profit | Either this or prices |
+| fees | 交易成本 / total_fee, or complete commission + tax fields | Estimated only for price-derived P&L; direct net P&L is not charged twice |
+| pnl | pnl / 損益 / net_pnl / 淨損益 | Either this or prices; the standard-field contract is net of all costs |
+| pnl_currency | 損益幣別 / 帳戶幣別 | Required for direct P&L; only price-derived P&L may use the instrument's native quote currency |
 | tag | 策略 / strategy / 進場理由 | Optional (strongly recommended) |
+
+> Headers such as `盈虧`, `已實現損益`, and `realized_pnl` do not prove whether the
+> amount is gross or net. Rename them to an explicitly net header, or confirm the
+> mapping with `--field pnl=your_column`. Gross headers such as `profit` are accepted
+> only when a trustworthy `total_fee` is present on the same row and can be deducted.
 
 > **Strongly consider filling in `tag` (strategy label)**: the tool computes win rates for each approach separately,
 > helping you see "which approach actually works and which one is just giving money away".
@@ -226,7 +251,8 @@ cd my_bot && pip install -r requirements.txt && python main.py
 2. **Live-order safety gate**: orders to a real broker are blocked unless you personally call
    `confirm_live_trading(i_understand_the_risk=True)` AND change `ALLOW_LIVE_TRADING`
    to `True` in `main.py`.
-3. **Verdict linkage**: if your trade history is judged to be gambling, the generated project **disables live trading by default**.
+3. **Full-stage linkage**: the scaffold does not rely on the in-sample verdict alone. Its live flag can be enabled only when
+   out-of-sample persistence, currency, and risk bases are reliable and the stage is `tiny_live_validation`; otherwise it stays `false`.
 
 > This tool generates code to help you, but it will **never place real-money orders for you, never fill in your API keys,
 > and never disarm the safety gate for you**. Real financial trading must be performed by you, at your own full responsibility.
@@ -239,7 +265,7 @@ core/
   models.py            # 統一資料模型（Trade / TradeLog，含契約乘數）
   markets.py           # 市場規格：契約乘數白名單、代號辨識、槓桿標註
   analyzer.py          # 高階一行式進入點
-  cli.py               # 命令列介面（14 個指令）
+  cli.py               # 命令列介面（18 個指令）
   report.py            # 中文文字報告
   report_html.py       # HTML 報告 + 分享圖卡（XSS 安全、自包含）
   ingest/              # 匯入層：CSV/JSON/Excel 自動辨識 + 各市場成本模型
@@ -257,7 +283,7 @@ core/
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 core/examples/       # 三市場範例資料(隨套件打包,pip 安裝後 demo 仍可用)
-tests/                 # 12 個測試檔，206 個測試
+tests/                 # 18 test files, 339 tests
 ```
 
 > **Things we deliberately do not do**: no Benford's-law test (returns include negatives and do not span
@@ -283,6 +309,13 @@ python tests/test_expansion.py
 python tests/test_skill_round.py
 python tests/test_round7.py
 python tests/test_round8.py
+python tests/test_round9.py
+python tests/test_round10.py
+python tests/test_line_antiscam.py
+python tests/test_missing_time_semantics.py
+python tests/test_onboarding.py
+python tests/test_screenshot_ingest.py
+python tests/test_trade_logic_audit.py
 ```
 
 ## Author
@@ -293,7 +326,7 @@ python tests/test_round8.py
 > Honesty statement: the byline above is a community pseudonym, and the "好棒棒反詐協會" is **not** a registered
 > legal entity or official organization. This project's credibility does not come from titles; it comes from:
 > public source code, reproducible experiments (`experiments/`, fixed seeds), the
-> [full methodology](docs/methodology.md), and 206 automated tests.
+> [full methodology](docs/methodology.md), and 339 automated tests.
 > Anyone is welcome to examine and challenge it — which is exactly what this tool asks the "gurus" to do.
 
 ## License

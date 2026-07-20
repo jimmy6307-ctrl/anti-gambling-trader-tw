@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..markets import infer_pnl_currency, is_leveraged
 from ..metrics.performance import compute_metrics
 from ..models import TradeLog
 from ..verdict.statistics import TwoSampleResult, welch_mean_test
@@ -41,6 +42,111 @@ MIN_PER_HALF = 15
 
 # 滾動期望值的預設視窗。太小 → 全是雜訊;太大 → 看不出變化。
 DEFAULT_ROLLING_WINDOW = 20
+
+
+def _missing_exit_time_count(log: TradeLog) -> int:
+    return sum(1 for t in log if not getattr(t, "exit_time_known", True))
+
+
+def _duplicate_exit_time_count(log: TradeLog) -> int:
+    known = [t.exit_time for t in log if getattr(t, "exit_time_known", True)]
+    return len(known) - len(set(known))
+
+
+def _mixed_exit_timezone_basis(log: TradeLog) -> bool:
+    awareness = {
+        bool(t.exit_time.tzinfo is not None and t.exit_time.utcoffset() is not None)
+        for t in log if getattr(t, "exit_time_known", True)
+    }
+    return len(awareness) > 1
+
+
+def _time_unavailable_reason(log: TradeLog) -> str:
+    missing = _missing_exit_time_count(log)
+    duplicate = _duplicate_exit_time_count(log)
+    if _mixed_exit_timezone_basis(log):
+        return (
+            "時間趨勢不可用:出場時間混用有時區與無時區格式，無法安全排序。"
+            "請統一 UTC offset 或全部改成同一當地時區。"
+        )
+    if duplicate:
+        return (
+            f"時間趨勢不可用:{duplicate} 筆交易與其他交易共用相同出場時間;"
+            "群組內真實先後未知，已拒絕用 CSV 列順序製造權益曲線或早期/近期結論。"
+            "請補上可區分先後的 exit_time，或先按同時間批次彙總。"
+        )
+    return (
+        f"時間趨勢不可用:{missing}/{len(log)} 筆缺少可靠的出場時間;"
+        "已拒絕使用 1970 佔位日期或檔案列順序假裝時序。"
+        "請補上每筆 exit_time/出場時間後再分析。"
+    )
+
+
+def _require_exit_times(log: TradeLog) -> None:
+    if (
+        _missing_exit_time_count(log)
+        or _duplicate_exit_time_count(log)
+        or _mixed_exit_timezone_basis(log)
+    ):
+        raise ValueError(_time_unavailable_reason(log))
+
+
+def _trade_return_reliable(trade) -> bool:
+    """Return whether ``return_pct`` has a trustworthy denominator.
+
+    ``Trade.return_pct`` returns 0 when its notional is unknown.  That sentinel
+    must never be treated as an observed 0% return by the trend statistics.
+    """
+    native_currency = infer_pnl_currency(trade.symbol, trade.market)
+    pnl_currency = getattr(trade, "pnl_currency", None)
+    currency_aligned = not (
+        pnl_currency
+        and native_currency
+        and str(pnl_currency).upper() != native_currency
+    )
+    return bool(
+        getattr(trade, "notional_reliable", True)
+        and getattr(trade, "contract_multiplier_known", True)
+        and trade.contract_value > 0
+        and not (
+            getattr(trade, "pnl_is_direct", False)
+            and not pnl_currency
+        )
+        and currency_aligned
+    )
+
+
+def _unreliable_return_count(log: TradeLog) -> int:
+    return sum(1 for trade in log if not _trade_return_reliable(trade))
+
+
+def _mixed_return_basis(log: TradeLog) -> bool:
+    """是否混合了不可直接比較的槓桿報酬母體。"""
+    markets = {trade.market for trade in log}
+    leveraged_markets = {market for market in markets if is_leveraged(market)}
+    # 同一槓桿市場內仍採相同 contract-value 口徑；只要再混入其他市場，
+    # 保證金/契約價值/現貨本金的經濟意義就不再一致，停止衰退檢定。
+    return bool(leveraged_markets and len(markets) > 1)
+
+
+def _return_metrics_reliable(log: TradeLog) -> bool:
+    return _unreliable_return_count(log) == 0 and not _mixed_return_basis(log)
+
+
+def _return_unavailable_reason(log: TradeLog) -> str:
+    unreliable = _unreliable_return_count(log)
+    reasons: list[str] = []
+    if unreliable:
+        reasons.append(
+            f"{unreliable}/{len(log)} 筆缺少可信的名目本金"
+            "(進場價、數量、契約乘數或損益幣別與報價幣別無法對齊)"
+        )
+    if _mixed_return_basis(log):
+        reasons.append("同一份紀錄混合槓桿與其他市場的不同報酬母體")
+    return (
+        f"報酬率趨勢不可用:{'；'.join(reasons)}；"
+        "已保留已實現損益的金額趨勢,但不判定優勢改善或衰退。"
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -64,8 +170,10 @@ class PeriodBucket:
     win_rate: float
     expectancy: float        # 每筆期望損益(金額)
     total_pnl: float
-    avg_return_pct: float     # 每筆平均報酬率(scale-invariant,較能跨期比較)
+    avg_return_pct: float | None  # 報酬率不可靠時為 None,不使用假 0%
     reliability: str         # "ok" | "low" | "too_few"
+    return_metrics_reliable: bool = True
+    return_note: str = ""
 
     @property
     def too_few(self) -> bool:
@@ -123,6 +231,9 @@ def bucket_by_period(
     """
     if granularity not in ("month", "quarter"):
         raise ValueError("granularity 必須是 'month' 或 'quarter'")
+    _require_exit_times(log)
+    return_reliable = _return_metrics_reliable(log)
+    return_note = "" if return_reliable else _return_unavailable_reason(log)
 
     ordered = list(log.sorted_by_time())
     groups: dict[str, list] = {}
@@ -136,8 +247,8 @@ def bucket_by_period(
     for key in sorted(groups):
         sub = TradeLog(groups[key], log.source, f"{log.account_label}::{key}")
         m = compute_metrics(sub)
-        rets = [t.return_pct for t in groups[key]]
-        avg_ret = sum(rets) / len(rets) if rets else 0.0
+        rets = [t.return_pct for t in groups[key]] if return_reliable else []
+        avg_ret = sum(rets) / len(rets) if rets else None
         buckets.append(PeriodBucket(
             period_key=key,
             period_label=labels[key],
@@ -149,6 +260,8 @@ def bucket_by_period(
             total_pnl=m.total_pnl,
             avg_return_pct=avg_ret,
             reliability=_reliability(m.total_trades),
+            return_metrics_reliable=return_reliable,
+            return_note=return_note,
         ))
     return buckets
 
@@ -177,6 +290,7 @@ def equity_curve(log: TradeLog) -> list[EquityPoint]:
     同時附上每點的回撤,方便圖上標示水下區間。這裡是單純的累加,
     不做任何推論。
     """
+    _require_exit_times(log)
     ordered = list(log.sorted_by_time())
     points: list[EquityPoint] = []
     cum = 0.0
@@ -206,7 +320,8 @@ class RollingPoint:
     exit_time: str
     window: int              # 視窗實際包含筆數
     rolling_expectancy: float
-    rolling_return_pct: float
+    rolling_return_pct: float | None
+    return_metrics_reliable: bool = True
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -226,22 +341,25 @@ def rolling_expectancy(
     """
     if window < 2:
         raise ValueError("window 至少為 2")
+    _require_exit_times(log)
     ordered = list(log.sorted_by_time())
     n = len(ordered)
     if n < window:
         return []
     pnls = [t.pnl or 0.0 for t in ordered]
-    rets = [t.return_pct for t in ordered]
+    return_reliable = _return_metrics_reliable(log)
+    rets = [t.return_pct for t in ordered] if return_reliable else []
     points: list[RollingPoint] = []
     for i in range(window - 1, n):
         seg_p = pnls[i - window + 1:i + 1]
-        seg_r = rets[i - window + 1:i + 1]
+        seg_r = rets[i - window + 1:i + 1] if return_reliable else []
         points.append(RollingPoint(
             index=i + 1,
             exit_time=ordered[i].exit_time.isoformat(),
             window=window,
             rolling_expectancy=sum(seg_p) / window,
-            rolling_return_pct=sum(seg_r) / window,
+            rolling_return_pct=(sum(seg_r) / window if return_reliable else None),
+            return_metrics_reliable=return_reliable,
         ))
     return points
 
@@ -266,12 +384,14 @@ class DecayResult:
     recent_n: int
     early_expectancy: float          # 金額(描述用)
     recent_expectancy: float
-    early_return_pct: float          # 報酬率(檢定用的口徑)
-    recent_return_pct: float
+    early_return_pct: float | None   # 報酬率(檢定用的口徑)
+    recent_return_pct: float | None
     direction: str                   # "improving" | "declining" | "flat" | "unknown"
     p_value: float | None            # 雙尾;None 表示未做檢定
     is_significant_change: bool      # 是否統計上顯著不同
     headline: str
+    return_metrics_reliable: bool = True
+    return_unavailable_reason: str = ""
     caveats: list[str] = field(default_factory=list)
     test: TwoSampleResult | None = None
 
@@ -288,6 +408,8 @@ class DecayResult:
             "p_value": self.p_value,
             "is_significant_change": self.is_significant_change,
             "headline": self.headline,
+            "return_metrics_reliable": self.return_metrics_reliable,
+            "return_unavailable_reason": self.return_unavailable_reason,
             "caveats": self.caveats,
         }
 
@@ -301,8 +423,59 @@ def detect_decay(log: TradeLog, *, alpha: float = 0.05) -> DecayResult:
       - 顯著且近期較高 → improving(帳面在進步,但仍非未來保證)
       - 不顯著        → flat(看不出明顯變化,注意:這不等於「沒有變化」)
     """
+    if (
+        _missing_exit_time_count(log)
+        or _duplicate_exit_time_count(log)
+        or _mixed_exit_timezone_basis(log)
+    ):
+        reason = _time_unavailable_reason(log)
+        return_reliable = _return_metrics_reliable(log)
+        return_reason = "" if return_reliable else _return_unavailable_reason(log)
+        return DecayResult(
+            enough_data=False,
+            early_n=0,
+            recent_n=0,
+            early_expectancy=0.0,
+            recent_expectancy=0.0,
+            early_return_pct=0.0,
+            recent_return_pct=0.0,
+            direction="unknown",
+            p_value=None,
+            is_significant_change=False,
+            headline=f"⚠️ {reason}",
+            return_metrics_reliable=return_reliable,
+            return_unavailable_reason=return_reason,
+            caveats=["沒有完整且可排序的出場時間時,不做早期/近期比較。"],
+        )
+
     ordered = list(log.sorted_by_time())
     n = len(ordered)
+
+    if not _return_metrics_reliable(log):
+        reason = _return_unavailable_reason(log)
+        half = n // 2
+        early, recent = ordered[:half], ordered[half:]
+        early_m = compute_metrics(TradeLog(early, log.source))
+        recent_m = compute_metrics(TradeLog(recent, log.source))
+        return DecayResult(
+            enough_data=False,
+            early_n=len(early),
+            recent_n=len(recent),
+            early_expectancy=early_m.expectancy,
+            recent_expectancy=recent_m.expectancy,
+            early_return_pct=None,
+            recent_return_pct=None,
+            direction="unknown",
+            p_value=None,
+            is_significant_change=False,
+            headline=f"⚠️ {reason}",
+            return_metrics_reliable=False,
+            return_unavailable_reason=reason,
+            caveats=[
+                "金額期望值只是描述統計;部位大小會影響金額,"
+                "不可據此聲稱交易技術在進步或衰退。"
+            ],
+        )
 
     common_caveats = [
         "此比較用『報酬率』而非金額,以免部位大小變化被誤讀成優勢變化。",
@@ -384,11 +557,19 @@ class TrendReport:
     rolling: list[RollingPoint]
     decay: DecayResult
     rolling_window: int
+    available: bool = True
+    unavailable_reason: str = ""
+    return_metrics_reliable: bool = True
+    return_unavailable_reason: str = ""
 
     def as_dict(self) -> dict:
         return {
             "granularity": self.granularity,
             "rolling_window": self.rolling_window,
+            "available": self.available,
+            "unavailable_reason": self.unavailable_reason,
+            "return_metrics_reliable": self.return_metrics_reliable,
+            "return_unavailable_reason": self.return_unavailable_reason,
             "buckets": [b.as_dict() for b in self.buckets],
             "equity": [e.as_dict() for e in self.equity],
             "rolling": [r.as_dict() for r in self.rolling],
@@ -398,6 +579,7 @@ class TrendReport:
 
 def _auto_granularity(log: TradeLog) -> str:
     """資料橫跨很久(> 24 個月)時改用季,避免月桶太多且各自太小。"""
+    _require_exit_times(log)
     months = {(t.exit_time.year, t.exit_time.month) for t in log}
     return "quarter" if len(months) > 24 else "month"
 
@@ -412,7 +594,34 @@ def analyze_trend(
 
     granularity: "auto"(預設)| "month" | "quarter"。
     """
+    if granularity not in ("auto", "month", "quarter"):
+        raise ValueError("granularity 必須是 'auto'、'month' 或 'quarter'")
+    if rolling_window < 2:
+        raise ValueError("rolling_window 至少為 2")
+    if (
+        _missing_exit_time_count(log)
+        or _duplicate_exit_time_count(log)
+        or _mixed_exit_timezone_basis(log)
+    ):
+        reason = _time_unavailable_reason(log)
+        return_reliable = _return_metrics_reliable(log)
+        return_reason = "" if return_reliable else _return_unavailable_reason(log)
+        return TrendReport(
+            granularity="month" if granularity == "auto" else granularity,
+            buckets=[],
+            equity=[],
+            rolling=[],
+            decay=detect_decay(log),
+            rolling_window=rolling_window,
+            available=False,
+            unavailable_reason=reason,
+            return_metrics_reliable=return_reliable,
+            return_unavailable_reason=return_reason,
+        )
+
     gran = _auto_granularity(log) if granularity == "auto" else granularity
+    return_reliable = _return_metrics_reliable(log)
+    return_reason = "" if return_reliable else _return_unavailable_reason(log)
     return TrendReport(
         granularity=gran,
         buckets=bucket_by_period(log, granularity=gran),
@@ -420,6 +629,8 @@ def analyze_trend(
         rolling=rolling_expectancy(log, window=rolling_window),
         decay=detect_decay(log),
         rolling_window=rolling_window,
+        return_metrics_reliable=return_reliable,
+        return_unavailable_reason=return_reason,
     )
 
 
@@ -433,9 +644,17 @@ def render_trend_text(report: TrendReport) -> str:
     unit = "季" if report.granularity == "quarter" else "月"
     L.append(f"【📈 時間趨勢 — 我在進步還是退步?(依{unit}彙總)】")
 
+    if not report.available:
+        L.append(f"  ⚠️ {report.unavailable_reason}")
+        return "\n".join(L)
+
     if not report.buckets:
         L.append("  沒有可彙總的交易。")
         return "\n".join(L)
+
+    if not report.return_metrics_reliable:
+        L.append(f"  ⚠️ {report.return_unavailable_reason}")
+        L.append("  以下僅顯示已實現損益金額,不將金額變化解讀為技術進步或退步。")
 
     L.append(f"  期間            筆數   勝率     每筆期望值      總損益      狀態")
     L.append("  " + "─" * 64)

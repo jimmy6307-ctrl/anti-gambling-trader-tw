@@ -44,9 +44,9 @@ def test_loader_skips_bad_time_order_row():
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "t.csv"
         p.write_text(
-            "symbol,entry_time,exit_time,entry_price,exit_price,quantity,fees\n"
-            "2330,2025-03-01,2025-01-01,100,110,1000,0\n"
-            "2330,2025-01-01,2025-03-01,100,110,1000,0\n",
+            "symbol,side,entry_time,exit_time,entry_price,exit_price,quantity,fees\n"
+            "2330,long,2025-03-01,2025-01-01,100,110,1000,0\n"
+            "2330,long,2025-01-01,2025-03-01,100,110,1000,0\n",
             encoding="utf-8")
         log = load_trades(str(p))
         assert len(log.trades) == 1
@@ -61,9 +61,9 @@ def test_loader_refuses_unknown_multiplier_derivative_without_pnl():
         p = Path(td) / "f.csv"
         # ZZZF202606 不在乘數白名單;hint 強制期貨市場
         p.write_text(
-            "symbol,entry_time,exit_time,entry_price,exit_price,quantity\n"
-            "ZZZF202606,2025-01-01,2025-01-02,100,110,1\n"
-            "ZZZF202606,2025-01-01,2025-01-02,100,110,1\n",
+            "symbol,side,entry_time,exit_time,entry_price,exit_price,quantity\n"
+            "ZZZF202606,long,2025-01-01,2025-01-02,100,110,1\n"
+            "ZZZF202606,long,2025-01-01,2025-01-02,100,110,1\n",
             encoding="utf-8")
         try:
             load_trades(str(p), market_hint=Market.TW_FUTURES)
@@ -73,8 +73,8 @@ def test_loader_refuses_unknown_multiplier_derivative_without_pnl():
         # 直接給 pnl 就照收(使用者自己算好的數字)
         p2 = Path(td) / "f2.csv"
         p2.write_text(
-            "symbol,entry_time,exit_time,pnl\n"
-            "ZZZF202606,2025-01-01,2025-01-02,2000\n",
+            "symbol,entry_time,exit_time,net_pnl,pnl_currency\n"
+            "ZZZF202606,2025-01-01,2025-01-02,2000,TWD\n",
             encoding="utf-8")
         log = load_trades(str(p2), market_hint=Market.TW_FUTURES)
         assert len(log.trades) == 1 and log.trades[0].pnl == 2000.0

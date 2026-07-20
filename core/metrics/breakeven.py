@@ -63,14 +63,30 @@ def compute_break_even(metrics: PerformanceMetrics) -> BreakEvenTargets:
         t.messages.append("你的期望值已經為正 —— 目標是『維持』,別讓它衰退。")
         return t
 
+    # 打平交易不應偷偷被當成虧損。勝率的分母包含全部交易,所以當紀錄
+    # 內有打平交易時,win_rate + loss_rate < 1。以下目標假設打平比例維持
+    # 不變,只在原本有輸贏的交易之間改善勝負結構。
+    active_rate = (
+        (metrics.wins + metrics.losses) / metrics.total_trades
+        if metrics.total_trades > 0 else 0.0
+    )
+    loss_rate = (
+        metrics.losses / metrics.total_trades
+        if metrics.total_trades > 0 else 0.0
+    )
+
     # ── 固定盈虧比,要轉正所需的最低勝率 ──
-    # E = 0 → win_rate* × avg_win = (1 − win_rate*) × avg_loss
-    #     → win_rate* = avg_loss / (avg_win + avg_loss)
+    # E = 0 → win_rate* × avg_win
+    #         = (active_rate − win_rate*) × avg_loss
+    #     → win_rate* = active_rate × avg_loss / (avg_win + avg_loss)
     # 實務上勝率很難超過 ~90%;若所需勝率高到不切實際,當作結構性無解,
     # 別給「衝到 99% 勝率」這種誤導目標。
     if avg_win + avg_loss > 0:
-        req_wr = avg_loss / (avg_win + avg_loss)
-        if req_wr < 0.9:
+        req_active_wr = avg_loss / (avg_win + avg_loss)
+        req_wr = active_rate * req_active_wr
+        # 90% 門檻要看「有輸贏的交易」內部勝率,不能被大量打平交易
+        # 稀釋成看似很低的總勝率門檻。
+        if req_active_wr < 0.9:
             t.required_win_rate = req_wr
             t.win_rate_gap = req_wr - win_rate
             t.messages.append(
@@ -81,15 +97,16 @@ def compute_break_even(metrics: PerformanceMetrics) -> BreakEvenTargets:
             # 需要過高勝率才轉正(≥90%)→ 結構性無解
             t.structurally_hard = True
             t.messages.append(
-                f"以你目前的盈虧比,要轉正得有近 {req_wr:.0%} 的勝率,實務上幾乎不可能 —— "
+                f"以你目前的盈虧比,在有輸贏的交易中要有近 {req_active_wr:.0%} 的勝率"
+                f"(折合全部交易約 {req_wr:.0%}),實務上幾乎不可能 —— "
                 "問題出在『賺太少賠太多』的結構,必須提高盈虧比(減少虧損、增加獲利)。"
             )
 
     # ── 固定勝率,要轉正所需的最低盈虧比 ──
-    # E = 0 → win_rate × avg_win = (1 − win_rate) × avg_loss
-    #     → payoff* = avg_win/avg_loss = (1 − win_rate)/win_rate
+    # E = 0 → win_rate × avg_win = loss_rate × avg_loss
+    #     → payoff* = avg_win/avg_loss = loss_rate/win_rate
     if win_rate > 0:
-        req_payoff = (1 - win_rate) / win_rate
+        req_payoff = loss_rate / win_rate
         t.required_payoff_ratio = req_payoff
         t.payoff_gap = req_payoff - payoff
         if payoff > 0:
@@ -108,7 +125,7 @@ def compute_break_even(metrics: PerformanceMetrics) -> BreakEvenTargets:
     # 講「降低 X% 成本」會讓使用者誤以為只要降手續費率)。
     if metrics.total_trades > 0:
         avg_fee = metrics.total_fees / metrics.total_trades
-        if avg_fee > 0 and (expectancy + avg_fee) > 0:
+        if expectancy < 0 and avg_fee > 0 and (expectancy + avg_fee) > 0:
             needed = -expectancy            # 每筆要補的缺口(金額)
             t.fee_cut_to_breakeven = needed
             t.messages.append(

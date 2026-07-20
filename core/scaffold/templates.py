@@ -131,6 +131,15 @@ def _credentials_block(broker_key: str) -> str:
 
 
 def config_yaml(opts, discouraged: bool, verdict_level: str) -> str:
+    stage_code = getattr(getattr(opts, "stage", None), "code", "unverified")
+    stage_reason = getattr(
+        getattr(opts, "stage", None),
+        "reason",
+        "尚未完成含樣本外與風險基準的交易階段分析",
+    )
+    live_allowed = bool(
+        not discouraged and stage_code == "tiny_live_validation"
+    )
     return f"""# {opts.project_name} 設定檔範本
 # 複製成 config.yaml 後填入你的實際值。config.yaml 已被 .gitignore 排除。
 
@@ -158,7 +167,9 @@ risk:
 # 反詐投資王的裁決（產生時嵌入）
 anti_gambling:
   verdict_level: "{verdict_level}"
-  allow_live_trading: {str(not discouraged).lower()}   # 裁決勸退時預設 false
+  stage_code: {_json.dumps(stage_code, ensure_ascii=False)}
+  stage_reason: {_json.dumps(stage_reason, ensure_ascii=False)}
+  allow_live_trading: {str(live_allowed).lower()}   # 只有完整 stage 為 tiny_live_validation 才可能 true
 """
 
 

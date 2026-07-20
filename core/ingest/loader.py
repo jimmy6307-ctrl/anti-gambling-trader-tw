@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from ..markets import contract_multiplier as _contract_multiplier
 from ..markets import infer_market as _infer_market
+from ..markets import infer_pnl_currency as _infer_pnl_currency
 from ..models import Market, Side, Trade, TradeLog
 from .costs import estimate_round_trip_cost
 
@@ -54,7 +55,9 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
     ],
     "quantity": [
         "quantity", "qty", "數量", "股數", "張數", "張", "size", "amount", "volume",
-        "口數", "成交數量", "成交股數", "shares", "成交量",
+        "口數", "手數", "手", "lot", "lots", "成交數量", "成交股數", "shares", "成交量",
+        # 外匯只有這些欄名能明確表示「基礎貨幣單位」，而不是標準/迷你/微型手。
+        "units", "unit", "baseunits", "basequantity", "基礎貨幣單位", "基礎貨幣數量",
     ],
     "fees": [
         "fees", "fee", "手續費", "費用", "成本費用", "commission", "手續費及稅",
@@ -63,11 +66,16 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
         "證交稅", "交易稅", "手續費及交易稅", "ibcommission",
     ],
     "pnl": [
-        "pnl", "profit", "損益", "盈虧", "已實現損益", "realized_pnl", "獲利",
-        "net_pnl", "賺賠",
+        # 優先採用標準或明示「淨」的欄位；同檔另有 gross/模糊欄時不可搶先配對。
+        "pnl", "net_pnl", "netpnl", "損益", "已實現淨損益", "淨損益",
+        "profit", "盈虧", "已實現損益", "realized_pnl", "獲利", "賺賠",
         # 注意:不收 "return" —— 它常指「報酬率(%)」而非損益金額,會被誤當金額。
         # 台股 / 幣安 / IBKR
-        "損益金額", "淨收付", "淨收付金額", "realized profit", "fifopnlrealized",
+        "損益金額", "realized profit", "fifopnlrealized",
+    ],
+    "pnl_currency": [
+        "pnl_currency", "pnlcurrency", "損益幣別", "帳戶幣別", "結算幣別",
+        "account_currency", "accountcurrency", "settlement_currency",
     ],
     "tag": [
         "tag", "策略", "strategy", "標籤", "備註", "note", "remark", "策略名稱",
@@ -111,14 +119,13 @@ def infer_market(symbol: str, hint: Market | None = None) -> Market:
     return _infer_market(symbol, hint)
 
 
-def _parse_side(value: Any) -> Side:
+def _parse_side(value: Any) -> Side | None:
     v = _norm(value)
     if v in SHORT_TOKENS:
         return Side.SHORT
     if v in LONG_TOKENS:
         return Side.LONG
-    # 預設視為做多(最常見);無法判斷時不該悄悄出錯,但也不該卡住分析
-    return Side.LONG
+    return None
 
 
 def _parse_time(value: Any) -> datetime:
@@ -143,14 +150,42 @@ def _parse_time(value: Any) -> datetime:
         raise ValueError(f"無法解析時間格式: {value!r}") from exc
 
 
+def _has_time_value(value: Any) -> bool:
+    """原始列是否真的提供時間；空白、破折號不算。"""
+    return value is not None and str(value).strip() not in ("", "-", "—")
+
+
+def _time_has_explicit_zone(value: Any) -> bool:
+    """判斷原值是否明示 UTC/offset；不替 naive 時間猜使用者時區。"""
+
+    if isinstance(value, datetime):
+        return value.tzinfo is not None and value.utcoffset() is not None
+    return bool(re.search(r"(?:Z|[+\-]\d{2}:?\d{2})$", str(value).strip(), re.I))
+
+
+def _local_calendar_date(value: Any):
+    """取得原始掛鐘日期；UTC 正規化只用於排序，不能改寫交易日。"""
+
+    if isinstance(value, datetime):
+        return value.date()
+    s = str(value).strip()
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except ValueError:
+        return _parse_time(value).date()
+
+
 def _naive(dt: datetime) -> datetime:
-    """統一去除時區資訊(保留掛鐘時間)。
+    """統一成可比較的 naive datetime；aware 時間先換成 UTC。
 
     同一份檔案若混有帶時區(ISO 格式)與不帶時區的時間,
-    aware 與 naive datetime **不能互相比較** —— 排序、當沖判定、
-    月份分桶會直接 TypeError 崩潰。統一轉 naive 保證可比較。
+    aware 與 naive datetime **不能互相比較**；直接拔掉 offset 又會改變真實
+    先後順序。帶時區值先轉成同一 UTC 絕對時間，再移除 tzinfo；不帶時區
+    值維持原掛鐘時間，視為同一個使用者當地時區。
     """
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+    if dt.tzinfo is not None and dt.utcoffset() is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def _to_float(value: Any, default: float | None = None) -> float | None:
@@ -159,8 +194,16 @@ def _to_float(value: Any, default: float | None = None) -> float | None:
     if isinstance(value, (int, float)):
         f = float(value)
         return f if math.isfinite(f) else default
-    # 去除千分位逗號、貨幣符號、空白
-    s = re.sub(r"[,$￥¥\s]", "", str(value))
+    # 幣別只能出現在數字頭尾；不要用全域 replace 把中間髒文字修成數字。
+    s = str(value).strip()
+    currency_token = (
+        r"(?:NT\$|US\$|TWD|NTD|USD|JPY|EUR|GBP|CHF|CAD|AUD|NZD|"
+        r"SGD|KRW|CNY|CNH|RMB|HKD|USDT|USDC|BUSD)"
+    )
+    s = re.sub(rf"(?i)^\s*{currency_token}\s*", "", s, count=1)
+    s = re.sub(rf"(?i)\s*{currency_token}\s*$", "", s, count=1)
+    s = re.sub(r"^[,$￥¥＄]\s*", "", s, count=1)
+    s = re.sub(r"[,，\s]", "", s)
     if s in ("", "-", "—"):
         return default
     try:
@@ -170,6 +213,39 @@ def _to_float(value: Any, default: float | None = None) -> float | None:
     # "nan"/"inf" 能被 float() 接受,但會汙染整條統計管線
     # (NaN 的比較恆為 False,inf 讓權益/回撤全爛掉)——視同無法解析。
     return f if math.isfinite(f) else default
+
+
+def _normalize_currency(value: Any) -> str | None:
+    """正規化損益/帳戶幣別；不接受單獨 `$` 這種模稜兩可記號。"""
+
+    if value is None or str(value).strip() in ("", "-", "—"):
+        return None
+    raw = re.sub(r"\s+", "", str(value)).upper()
+    aliases = {"NT$": "TWD", "NTD": "TWD", "US$": "USD", "RMB": "CNY"}
+    raw = aliases.get(raw, raw)
+    if re.fullmatch(r"[A-Z]{3}", raw):
+        return raw
+    return raw if raw in {"USDT", "USDC", "BUSD"} else None
+
+
+def _currency_from_amount(value: Any) -> str | None:
+    """讀取損益值旁的幣別；不從商品代號猜帳戶結算幣別。"""
+
+    text = str(value or "").upper().strip()
+    if "NT$" in text or re.search(r"\b(?:TWD|NTD)\b", text):
+        return "TWD"
+    if "US$" in text or re.search(r"\bUSD\b", text):
+        return "USD"
+    if re.search(r"\bJPY\b", text):
+        return "JPY"
+    match = re.search(
+        r"\b(EUR|GBP|CHF|CAD|AUD|NZD|SGD|KRW|CNY|CNH|RMB|HKD|"
+        r"USDT|USDC|BUSD)\b",
+        text,
+    )
+    if not match:
+        return None
+    return {"RMB": "CNY"}.get(match.group(1), match.group(1))
 
 
 def sniff_format(path: str | Path) -> str:
@@ -284,6 +360,40 @@ def load_trades(
     if field_overrides:
         field_map.update(field_overrides)
 
+    dangerous_cashflow_columns = {
+        column for column in columns if _norm(column) in {"淨收付", "淨收付金額"}
+    }
+    if dangerous_cashflow_columns and "pnl" not in field_map:
+        shown = "、".join(sorted(dangerous_cashflow_columns))
+        raise ValueError(
+            f"欄位「{shown}」通常是單邊交割收付款（含本金），不是已平倉實現損益；"
+            "拒絕把它當 pnl。請改匯出已實現損益/realized P&L 報表。"
+        )
+
+    pnl_column = field_map.get("pnl", "")
+    pnl_column_norm = _norm(pnl_column)
+    beginner_layout = {
+        "代號", "方向", "進場時間", "出場時間", "進場價", "出場價",
+        "數量", "手續費", "損益", "損益幣別", "策略",
+    }.issubset(set(columns))
+    net_pnl_headers = {
+        "pnl", "net_pnl", "netpnl", "損益", "已實現淨損益", "淨損益",
+    }
+    gross_pnl_headers = {"profit", "獲利", "realizedprofit", "fifopnlrealized"}
+    if field_overrides and "pnl" in field_overrides:
+        # --field pnl=自訂淨利欄 是使用者對標準欄 contract 的明確確認。
+        pnl_semantics = "net"
+    elif pnl_column_norm in {_norm(name) for name in net_pnl_headers}:
+        pnl_semantics = "net"
+    elif pnl_column_norm == "損益" and beginner_layout:
+        pnl_semantics = "net"
+    elif pnl_column_norm in {_norm(name) for name in gross_pnl_headers}:
+        pnl_semantics = "gross"
+    elif pnl_column:
+        pnl_semantics = "ambiguous"
+    else:
+        pnl_semantics = "missing"
+
     # 檢查必要欄位。pnl 可由價格推算,故 pnl 與(進出場價)二擇一即可。
     required_core = ["symbol", "entry_price", "exit_price", "quantity"]
     has_prices = all(k in field_map for k in ("entry_price", "exit_price", "quantity"))
@@ -307,17 +417,100 @@ def load_trades(
         col = field_map.get(std)
         return row.get(col, default) if col else default
 
+    normalized_columns = {_norm(column): column for column in columns}
+
+    def matching_columns(names: set[str]) -> list[str]:
+        return [
+            actual for normalized, actual in normalized_columns.items()
+            if normalized in {_norm(name) for name in names}
+        ]
+
+    fee_override = field_map.get("fees") if field_overrides and "fees" in field_overrides else None
+    total_fee_columns = matching_columns({
+        "fees", "fee", "費用", "成本費用", "手續費及稅", "手續費及交易稅",
+        "交易成本", "total_fee",
+    })
+    commission_columns = matching_columns({"手續費", "commission", "ibcommission"})
+    tax_columns = matching_columns({"證交稅", "交易稅"})
+    if fee_override:
+        fee_columns = [fee_override]
+        fee_mode = "override_total"
+    elif total_fee_columns:
+        fee_columns = [total_fee_columns[0]]
+        fee_mode = "explicit_total"
+    else:
+        fee_columns = list(dict.fromkeys(commission_columns + tax_columns))
+        fee_mode = "components" if fee_columns else "missing"
+    # 只讓「可解析的時間」參與整檔時區一致性判斷。格式錯誤的 direct net
+    # pnl 時間會在逐列階段降級為 unknown；若在這裡把髒字串當成無時區，
+    # 它會讓同檔內原本合法的 aware 時間也整批被拒絕。
+    time_awareness: set[bool] = set()
+    for row in rows:
+        for std in ("entry_time", "exit_time"):
+            value = get(row, std)
+            if not _has_time_value(value):
+                continue
+            try:
+                _parse_time(value)
+            except ValueError:
+                continue
+            time_awareness.add(_time_has_explicit_zone(value))
+    if len(time_awareness) > 1:
+        raise ValueError(
+            "同一份紀錄混用了有時區與無時區的時間，無法安全判定真實先後順序。"
+            "請先全部補成相同 UTC offset（例如 +08:00），或全部改成同一當地時區。"
+        )
+    all_times_are_aware = time_awareness == {True}
+
+    buy_sell_mapped_fields = {
+        "entry_price": {"買進價", "買價", "buy_price"},
+        "exit_price": {"賣出價", "賣價", "sell_price"},
+        "entry_time": {"買進時間", "買進日期", "buy_date"},
+        "exit_time": {"賣出時間", "賣出日期", "sell_date"},
+    }
+    short_uses_buy_sell_mapping = any(
+        _norm(field_map.get(field, "")) in {_norm(name) for name in names}
+        for field, names in buy_sell_mapped_fields.items()
+    )
+    generic_entry_price_columns = {
+        "成交價", "成交均價", "price", "tradeprice", "成交單價"
+    }
+    direct_entry_basis_ambiguous = (
+        _norm(field_map.get("entry_price", ""))
+        in {_norm(name) for name in generic_entry_price_columns}
+    )
+
     # 台股「張」單位偵測:若數量欄名含「張」(如 張數、張),代表單位是「張」
     # 而非「股」,1 張 = 1000 股。不換算會讓損益與成本差 1000 倍且不報錯,
     # 對台股使用者是最危險的靜默錯誤。
     qty_col = field_map.get("quantity", "")
-    qty_in_lots = ("張" in str(qty_col))
+    qty_col_norm = _norm(qty_col)
+    qty_in_lots = (
+        "張" in str(qty_col)
+        or qty_col_norm in {"lot", "lots", "boardlot", "boardlots"}
+    )
+    qty_in_ambiguous_hands = "手" in str(qty_col)
     lot_multiplier = 1000 if qty_in_lots else 1
+    forex_base_unit_columns = {
+        "units", "unit", "baseunits", "basequantity", "基礎貨幣單位", "基礎貨幣數量",
+    }
+    qty_is_explicit_forex_units = _norm(qty_col) in forex_base_unit_columns
 
     trades: list[Trade] = []
     skipped = 0
     skip_reasons: list[str] = []   # 收集略過原因,回報給使用者(不再靜默吞錯)
     unknown_multiplier_symbols: set[str] = set()   # 槓桿商品但查不到契約乘數
+    ambiguous_forex_symbols: set[str] = set()
+    invalid_lot_unit_symbols: set[str] = set()
+    ambiguous_entry_basis_symbols: set[str] = set()
+    tw_lot_converted = 0
+    direct_pnl_count = 0
+    gross_pnl_adjusted_count = 0
+    unknown_side_count = 0
+    retained_bad_entry_time_count = 0
+    retained_bad_exit_time_count = 0
+    ignored_net_fee_count = 0
+    invalid_direct_notional_symbols: set[str] = set()
     for row in rows:
         row_no = len(trades) + skipped + 1
         symbol = str(get(row, "symbol", "")).strip()
@@ -330,31 +523,273 @@ def load_trades(
                 skip_reasons.append(f"第 {row_no} 列:缺少標的代號")
             continue
 
-        # 時間解析失敗是「這列資料髒」的明確訊號,單獨捕捉並記錄原因。
-        try:
-            entry_time = _parse_time(get(row, "entry_time", "1970-01-01"))
-            exit_time = (
-                _parse_time(get(row, "exit_time")) if get(row, "exit_time") else entry_time
-            )
-        except ValueError as exc:
+        # 先判斷是否真的有可用的 direct net pnl。只有這種已結算金額，才可在
+        # optional 時間或費用欄髒掉時保留；gross pnl 與價差推算仍需完整可信資料。
+        pnl_raw = get(row, "pnl")
+        pnl = _to_float(pnl_raw, None)
+        pnl_was_provided = (
+            pnl_raw is not None and str(pnl_raw).strip() not in ("", "-", "—")
+        )
+        if pnl_was_provided and pnl is None:
             skipped += 1
             if len(skip_reasons) < 10:
-                skip_reasons.append(f"第 {row_no} 列({symbol}):時間格式無法解析 — {exc}")
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):pnl「{pnl_raw}」無法解析；"
+                    "拒絕忽略它後改用價差推算"
+                )
             continue
+        if pnl is not None and pnl_semantics == "ambiguous":
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):欄位「{pnl_column}」無法確認是 gross 還是"
+                    "已扣全部成本的 net pnl；確認後請改名 net_pnl/已實現淨損益，"
+                    "或用 --field pnl=原欄名 明確確認"
+                )
+            continue
+        is_direct_net_pnl = pnl is not None and pnl_semantics == "net"
+
+        # 時間欄缺少時仍保留 datetime 佔位值以相容舊 API，但 known 旗標
+        # 必須為 False。後續當沖/持倉/趨勢邏輯只能使用 known 時間。
+        entry_time_raw = get(row, "entry_time")
+        exit_time_raw = get(row, "exit_time")
+        entry_time_known = "entry_time" in field_map and _has_time_value(entry_time_raw)
+        exit_time_known = "exit_time" in field_map and _has_time_value(exit_time_raw)
+        bad_entry_time_retained = False
+        bad_exit_time_retained = False
+        entry_time = datetime(1970, 1, 1)
+        entry_local_date = None
+        if entry_time_known:
+            try:
+                entry_time = _parse_time(entry_time_raw)
+                entry_local_date = _local_calendar_date(entry_time_raw)
+            except ValueError as exc:
+                if not is_direct_net_pnl:
+                    skipped += 1
+                    if len(skip_reasons) < 10:
+                        skip_reasons.append(
+                            f"第 {row_no} 列({symbol}):進場時間格式無法解析 — {exc}"
+                        )
+                    continue
+                entry_time_known = False
+                bad_entry_time_retained = True
+
+        # 出場時間獨立解析，避免一個壞時間拖累同列另一個可用時間。
+        exit_time = entry_time
+        exit_local_date = None
+        if exit_time_known:
+            try:
+                exit_time = _parse_time(exit_time_raw)
+                exit_local_date = _local_calendar_date(exit_time_raw)
+            except ValueError as exc:
+                if not is_direct_net_pnl:
+                    skipped += 1
+                    if len(skip_reasons) < 10:
+                        skip_reasons.append(
+                            f"第 {row_no} 列({symbol}):出場時間格式無法解析 — {exc}"
+                        )
+                    continue
+                exit_time_known = False
+                exit_time = entry_time
+                bad_exit_time_retained = True
 
         market = infer_market(symbol, market_hint)
-        side = _parse_side(get(row, "side", "long"))
+        parsed_side = _parse_side(get(row, "side"))
 
         entry_price_raw = _to_float(get(row, "entry_price"), None)
         exit_price_raw = _to_float(get(row, "exit_price"), None)
         quantity_raw = _to_float(get(row, "quantity"), None)
 
-        # 契約乘數:期貨/選擇權必須乘,否則損益少算 200 倍。
-        # 查不到就是 1.0 + unknown 旗標,絕不亂猜。
-        mult, mult_known = _contract_multiplier(symbol)
+        # 契約乘數只屬於台灣期貨/選擇權。使用者若明示其他市場，代號即使
+        # 剛好長得像 TXF/TXO 也不可套用台期乘數，否則損益會被放大 50~200 倍。
+        if market in (Market.TW_FUTURES, Market.TW_OPTIONS):
+            mult, mult_known = _contract_multiplier(symbol)
+        else:
+            mult, mult_known = 1.0, True
 
-        fees = _to_float(get(row, "fees"), None)
-        pnl = _to_float(get(row, "pnl"), None)
+        fee_values: list[float] = []
+        provided_fee_columns: set[str] = set()
+        fee_parse_failed = False
+        ignored_net_fee = False
+        for fee_column in fee_columns:
+            fees_raw = row.get(fee_column)
+            if fees_raw is None or str(fees_raw).strip() in ("", "-", "—"):
+                continue
+            provided_fee_columns.add(fee_column)
+            parsed_fee = _to_float(fees_raw, None)
+            if parsed_fee is None:
+                if is_direct_net_pnl:
+                    # net pnl 已含成本；髒掉的 optional fee 只能放棄揭露，不可把
+                    # 整筆已結算損益丟掉，否則會形成可被盈虧相關缺值扭曲的樣本。
+                    ignored_net_fee = True
+                    fee_values = []
+                    provided_fee_columns.clear()
+                    break
+                fee_parse_failed = True
+                if len(skip_reasons) < 10:
+                    skip_reasons.append(
+                        f"第 {row_no} 列({symbol}):成本欄 {fee_column}="
+                        f"「{fees_raw}」無法解析；拒絕靜默改用估計成本"
+                    )
+                break
+            fee_values.append(parsed_fee)
+        if fee_parse_failed:
+            skipped += 1
+            continue
+        if any(value < 0 for value in fee_values):
+            if is_direct_net_pnl:
+                ignored_net_fee = True
+                fee_values = []
+                provided_fee_columns.clear()
+            else:
+                skipped += 1
+                if len(skip_reasons) < 10:
+                    skip_reasons.append(
+                        f"第 {row_no} 列({symbol}):交易成本不可為負數"
+                    )
+                continue
+        fees = sum(fee_values) if fee_values else None
+        if pnl is not None and pnl_semantics == "gross":
+            if fees is None or fee_mode not in {"explicit_total", "override_total"}:
+                skipped += 1
+                if len(skip_reasons) < 10:
+                    skip_reasons.append(
+                        f"第 {row_no} 列({symbol}):欄位「{pnl_column}」視為 gross pnl，"
+                        "但缺少明確總成本欄（total_fee/交易成本），無法換成淨損益"
+                    )
+                continue
+            pnl -= fees
+            gross_pnl_adjusted_count += 1
+        raw_currency = get(row, "pnl_currency")
+        field_currency = _normalize_currency(raw_currency)
+        amount_currency = _currency_from_amount(pnl_raw)
+        if (
+            raw_currency is not None
+            and str(raw_currency).strip() not in ("", "-", "—")
+            and field_currency is None
+        ):
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):損益幣別「{raw_currency}」無法辨識；"
+                    "請填三碼幣別（如 TWD/USD/JPY）或 USDT/USDC"
+            )
+            continue
+        if field_currency and amount_currency and field_currency != amount_currency:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):pnl 金額寫 {amount_currency}，"
+                    f"但 pnl_currency 欄寫 {field_currency}；幣別衝突"
+                )
+            continue
+        explicit_currency = field_currency or amount_currency
+        if pnl is not None and explicit_currency is None:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):direct pnl 缺少帳戶結算幣別；"
+                    "請填 pnl_currency/損益幣別，或在金額旁寫 TWD、USD、USDT 等"
+                )
+            continue
+
+        # direct pnl 是券商結算後金額，不能從 AAPL/EURJPY 猜帳戶幣別。
+        # 價差推算則一定是商品原生報價幣別；若另填不同幣別但沒有匯率，也拒絕。
+        native_quote_currency = _infer_pnl_currency(symbol, market)
+        if (
+            pnl is None
+            and explicit_currency
+            and native_quote_currency
+            and explicit_currency != native_quote_currency
+        ):
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):價差推算的原生幣別為 {native_quote_currency}，"
+                    f"但損益幣別填 {explicit_currency}；缺少匯率，拒絕換算"
+                )
+            continue
+        pnl_currency = (
+            explicit_currency if pnl is not None
+            else (native_quote_currency or explicit_currency)
+        )
+        if pnl is not None:
+            direct_pnl_count += 1
+
+        # 外匯券商的 quantity 可能是「1 手」也可能是「100000 units」。標準手、
+        # 迷你手、微型手又各差 10 倍，不能看到數字 1 就偷偷乘 100000。
+        # 沒有直接 pnl 時，只有欄名明示 base units 才允許由價差推算。
+        forex_quantity_ambiguous = (
+            market == Market.FOREX
+            and quantity_raw is not None
+            and not qty_is_explicit_forex_units
+        )
+        if pnl is None and market == Market.FOREX:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):外匯價差損益的報價幣別與帳戶換匯口徑未知，"
+                    "拒絕直接用價差×數量推算；請提供券商已換算、已扣成本的 pnl"
+                )
+            continue
+        if pnl is None and market == Market.UNKNOWN:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):市場與數量/成本規格無法辨識，"
+                    "拒絕用通用乘數 1 推算損益；請指定 --market 或提供 direct net pnl"
+                )
+            continue
+        incomplete_component_costs = (
+            fee_mode == "components"
+            and bool(fee_values)
+            and (
+                not any(column in provided_fee_columns for column in commission_columns)
+                or (
+                    market in (
+                        Market.TW_STOCK,
+                        Market.TW_ETF,
+                        Market.TW_FUTURES,
+                        Market.TW_OPTIONS,
+                    )
+                    and not any(column in provided_fee_columns for column in tax_columns)
+                )
+                or (
+                    market in (
+                        Market.TW_STOCK,
+                        Market.TW_ETF,
+                        Market.TW_FUTURES,
+                        Market.TW_OPTIONS,
+                    )
+                    and not (commission_columns and tax_columns)
+                )
+            )
+        )
+        if pnl is None and incomplete_component_costs:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):成本只有部分分項，缺少完整手續費/佣金與交易稅；"
+                    "拒絕把部分成本冒充完整成本，請補總 costs 或 direct net pnl"
+                )
+            continue
+
+        non_tw_lot_unit = (
+            qty_in_lots
+            and quantity_raw is not None
+            and market not in (Market.TW_STOCK, Market.TW_ETF)
+        )
+        ambiguous_hand_unit = qty_in_ambiguous_hands and quantity_raw is not None
+        if pnl is None and (non_tw_lot_unit or ambiguous_hand_unit):
+            skipped += 1
+            if len(skip_reasons) < 10:
+                unit_label = "手" if ambiguous_hand_unit else "張/lot"
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):數量欄以『{unit_label}』表示，"
+                    f"無法對 {market.value} 安全換算；台股請改填股/shares 或張/lots，"
+                    "其他市場請改填 shares/口/contracts/units"
+                )
+            continue
 
         # 有效性守門:這列的損益必須「算得出來」——
         # 要嘛直接給了 pnl,要嘛(進場價 > 0、出場價 ≥ 0、數量 > 0)齊全。
@@ -374,6 +809,41 @@ def load_trades(
                 )
             continue
 
+        # 價差損益的正負取決於做多/做空。市場/欄位完整性先檢查，讓新手先
+        # 看到最根本的錯誤；資料齊全後仍缺方向則絕不默認 long。
+        if pnl is None and parsed_side is None:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):缺少或無法辨識做多/做空方向，"
+                    "拒絕由價差推算損益；請提供 side 或直接淨 pnl"
+                )
+            continue
+        if pnl is None and parsed_side == Side.SHORT and short_uses_buy_sell_mapping:
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):空單不可把 buy/sell 價格或時間固定當 entry/exit；"
+                    "請把欄名改成 entry_price/exit_price、entry_time/exit_time 後再分析"
+                )
+            continue
+        if (
+            pnl is None
+            and parsed_side == Side.SHORT
+            and market in (Market.TW_STOCK, Market.TW_ETF, Market.US_STOCK)
+        ):
+            skipped += 1
+            if len(skip_reasons) < 10:
+                skip_reasons.append(
+                    f"第 {row_no} 列({symbol}):股票/商品放空的借券費、融券利息與召回成本"
+                    "無法由價差可靠估算；請提供券商已扣全部成本的 direct net pnl"
+                )
+            continue
+        side_known = parsed_side is not None
+        side = parsed_side or Side.LONG  # direct pnl 的相容佔位值，不得用來反推方向
+        if not side_known:
+            unknown_side_count += 1
+
         # 台期/選擇權且乘數未知:pnl 沒直接給的話,用乘數 1.0 推算會少算
         # 數十到數千倍 —— 那不是「估計」,是錯的數字。誠實略過並要求 pnl。
         if (
@@ -391,22 +861,92 @@ def load_trades(
 
         entry_price = entry_price_raw or 0.0
         exit_price = exit_price_raw or 0.0
-        quantity = (quantity_raw or 0.0) * lot_multiplier
+        row_lot_multiplier = (
+            lot_multiplier if market in (Market.TW_STOCK, Market.TW_ETF) else 1
+        )
+        quantity = (quantity_raw or 0.0) * row_lot_multiplier
+        if (
+            qty_in_lots
+            and quantity_raw is not None
+            and quantity_raw > 0
+            and row_lot_multiplier == 1000
+        ):
+            tw_lot_converted += 1
+        notional_reliable = True
+        invalid_direct_notional = False
+        if pnl is not None and (
+            entry_price_raw is None
+            or entry_price_raw <= 0
+            or quantity_raw is None
+            or quantity_raw <= 0
+        ):
+            # direct pnl 金額不依賴價量欄，因此保留；但沒有正的實際進場價與
+            # 數量，就沒有可驗證的本金母體，絕不能產生看似精確的 return。
+            entry_price = (
+                entry_price_raw
+                if entry_price_raw is not None and entry_price_raw > 0
+                else 0.0
+            )
+            quantity = (
+                quantity_raw * row_lot_multiplier
+                if quantity_raw is not None and quantity_raw > 0
+                else 0.0
+            )
+            notional_reliable = False
+            invalid_direct_notional = True
+        if pnl is not None and (
+            direct_entry_basis_ambiguous
+            or (parsed_side == Side.SHORT and short_uses_buy_sell_mapping)
+        ):
+            notional_reliable = False
+            ambiguous_entry_basis_symbols.add(symbol)
+        if pnl is not None and (non_tw_lot_unit or ambiguous_hand_unit):
+            # direct pnl 金額仍可用；欄名「張」對非台股沒有安全換算，故部位歸零。
+            entry_price = 0.0
+            exit_price = 0.0
+            quantity = 0.0
+            notional_reliable = False
+            invalid_lot_unit_symbols.add(symbol)
+        if (
+            pnl is not None
+            and (
+                not pnl_currency
+                or not native_quote_currency
+                or pnl_currency != native_quote_currency
+            )
+        ):
+            # 例：AAPL 名目本金是 USD，但 direct pnl 已由券商換成 TWD；
+            # 沒有匯率就不能拿 TWD / USD 算 32 倍假報酬。
+            notional_reliable = False
+        if market in (Market.TW_FUTURES, Market.TW_OPTIONS) and not mult_known:
+            notional_reliable = False
+            unknown_multiplier_symbols.add(symbol)
+        if pnl is not None and forex_quantity_ambiguous:
+            # 直接損益仍可用來做金額統計，但名目部位不可信；歸零可讓報告明示
+            # 回撤百分比/報酬率沒有可靠資本基準，也避免估出錯 10 萬倍的成本。
+            entry_price = 0.0
+            exit_price = 0.0
+            quantity = 0.0
+            ambiguous_forex_symbols.add(symbol)
+            notional_reliable = False
         tag = get(row, "tag")
         tag = str(tag).strip() if tag not in (None, "") else None
 
         # 成本處理:使用者沒給 fees 且開啟自動估算時,補上估計成本。
-        # 「乘數未知就拒絕估算」只適用於**乘數真正必要**的台期/選擇權 ——
-        # FOREX 的 is_leveraged 是「報酬率不可比」的標註,其乘數本應為 1
-        # (口數已含在 quantity),若一併拒絕會讓外匯永遠估不到成本。
-        if fees is None and auto_estimate_costs and entry_price and quantity:
+        # 「乘數未知就拒絕估算」只適用於乘數真正必要的台期/選擇權。
+        # 外匯若是明示 base units 可用乘數 1；手數不明時已在上方拒絕或降級。
+        if pnl is None and fees is None and auto_estimate_costs and entry_price and quantity:
             if market in (Market.TW_FUTURES, Market.TW_OPTIONS) and not mult_known:
                 unknown_multiplier_symbols.add(symbol)
                 fees = 0.0
             else:
-                # 當沖判定:進出場同一交易日(與 Trade.is_day_trade 同義)。
-                # 台股當沖證交稅減半。
-                is_day_trade = entry_time.date() == exit_time.date()
+                # 當沖成本優惠只能在進/出場時間都由原始資料提供時套用。
+                # pnl-only 的 1970 佔位值不是真實交易日，不得誤用當沖稅率。
+                is_day_trade = (
+                    entry_time_known
+                    and exit_time_known
+                    and entry_local_date == exit_local_date
+                )
                 fees = estimate_round_trip_cost(
                     market, side, entry_price, exit_price, quantity,
                     is_day_trade=is_day_trade,
@@ -428,6 +968,14 @@ def load_trades(
                 pnl=pnl,  # 若為 None,Trade.__post_init__ 會用價格推算(已含 fees)
                 tag=tag,
                 contract_multiplier=mult,
+                entry_time_known=entry_time_known,
+                exit_time_known=exit_time_known,
+                contract_multiplier_known=mult_known,
+                notional_reliable=notional_reliable,
+                pnl_currency=pnl_currency,
+                side_known=side_known,
+                entry_local_date=entry_local_date,
+                exit_local_date=exit_local_date,
             )
         except ValueError as exc:
             # Trade 的不變量驗證(如出場早於進場)→ 記錄原因後略過該列
@@ -436,6 +984,14 @@ def load_trades(
                 skip_reasons.append(f"第 {row_no} 列:{exc}")
             continue
         trades.append(trade)
+        if bad_entry_time_retained:
+            retained_bad_entry_time_count += 1
+        if bad_exit_time_retained:
+            retained_bad_exit_time_count += 1
+        if ignored_net_fee:
+            ignored_net_fee_count += 1
+        if invalid_direct_notional:
+            invalid_direct_notional_symbols.add(symbol)
 
     if not trades:
         detail = "\n  ".join(skip_reasons) if skip_reasons else "請檢查欄位對應與資料格式。"
@@ -454,13 +1010,102 @@ def load_trades(
         preview = ";".join(skip_reasons[:2])
         more = f"(其餘 {skipped - 2} 列原因略)" if skipped > 2 else ""
         warn += f", 略過原因:{preview}{more}"
-    lot_note = ", 數量以『張』×1000 換算為股" if qty_in_lots else ""
+    lot_note = (
+        f", {tw_lot_converted} 筆台股/台股 ETF 數量以『張』×1000 換算為股"
+        if tw_lot_converted else ""
+    )
     if unknown_multiplier_symbols:
         syms = ", ".join(sorted(unknown_multiplier_symbols)[:3])
         warn += (
-            f", ⚠️{syms} 為槓桿商品但查不到契約乘數 —— 已跳過成本估算,"
-            "請自行在 fees 欄位填入實際費用(本工具拒絕用猜測的乘數算錯數字)"
+            f", ⚠️{syms} 為槓桿商品但查不到契約乘數 —— 已停用名目部位、"
+            "報酬率與自動成本；請提供直接淨 pnl 與實際 fees"
         )
+    if ambiguous_forex_symbols:
+        syms = ", ".join(sorted(ambiguous_forex_symbols)[:3])
+        warn += (
+            f", ⚠️{syms} 的外匯數量單位不明 —— 已採用檔案提供的 pnl，"
+            "但不計名目部位、報酬率與自動成本；若要計算請提供 units 欄"
+        )
+    if invalid_lot_unit_symbols:
+        syms = ", ".join(sorted(invalid_lot_unit_symbols)[:3])
+        warn += (
+            f", ⚠️{syms} 的『張/lot/手』不是可安全套用的數量單位——已保留 direct pnl，"
+            "但停用名目部位與報酬率；請改填 shares/口/units"
+        )
+    if ambiguous_entry_basis_symbols:
+        syms = ", ".join(sorted(ambiguous_entry_basis_symbols)[:3])
+        warn += (
+            f", ⚠️{syms} 的成交價/buy-sell 欄無法證明是實際進場成本——"
+            "已保留 direct pnl，但停用名目部位、報酬率與回撤百分比"
+        )
+    if invalid_direct_notional_symbols:
+        syms = ", ".join(sorted(invalid_direct_notional_symbols)[:3])
+        warn += (
+            f", ⚠️{syms} 的 direct pnl 缺少有效進場價或數量——已保留損益金額，"
+            "但停用名目部位、報酬率與回撤百分比"
+        )
+    if ignored_net_fee_count:
+        warn += (
+            f", ⚠️{ignored_net_fee_count} 筆 direct net pnl 的 optional fee 無法解析或為負數；"
+            "淨損益已保留，fees 改為 0/未知且未重複扣除"
+        )
+
+    currencies = {t.pnl_currency for t in trades if t.pnl_currency}
+    missing_currency = sum(1 for t in trades if not t.pnl_currency)
+    if (
+        len(currencies) > 1
+        or (currencies and missing_currency)
+        or (missing_currency and len(trades) > 1)
+    ):
+        shown = "、".join(sorted(currencies)) or "未知"
+        raise ValueError(
+            "同一份紀錄含不同或不明的損益幣別（"
+            f"{shown}；不明 {missing_currency} 筆），不可直接相加。"
+            "請依同一帳戶/結算幣別分檔，或提供 pnl_currency/損益幣別欄。"
+        )
+    currency_note = (
+        f", 損益幣別 {next(iter(currencies))}（未做匯率換算）"
+        if len(currencies) == 1 else
+        ", ⚠️損益幣別不明（請勿與其他帳戶或幣別合併）"
+    )
+    direct_pnl_note = (
+        f", {direct_pnl_count} 筆採用檔案直接 pnl；必須是已扣手續費/稅/滑價的淨損益，"
+        "fees 僅揭露、不重複扣除"
+        if direct_pnl_count else ""
+    )
+    if gross_pnl_adjusted_count:
+        direct_pnl_note += (
+            f", 其中 {gross_pnl_adjusted_count} 筆 gross pnl 已扣檔案明示總成本後轉為 net"
+        )
+    fee_note = (
+        ", 成本由手續費/佣金與證交稅分項加總"
+        if fee_mode == "components" and commission_columns and tax_columns else ""
+    )
+    side_note = (
+        f", ⚠️{unknown_side_count} 筆 direct pnl 缺少可靠方向——不納入方向偏好或策略反推"
+        if unknown_side_count else ""
+    )
+
+    unknown_entry_times = sum(1 for t in trades if not t.entry_time_known)
+    unknown_exit_times = sum(1 for t in trades if not t.exit_time_known)
+    time_note = ""
+    if unknown_entry_times or unknown_exit_times:
+        time_note = (
+            f", ⚠️時間資料不完整(缺進場 {unknown_entry_times} 筆、缺出場 {unknown_exit_times} 筆)"
+            "—— 這些交易不納入當沖/持倉指標；缺出場時間時不做時間趨勢"
+        )
+    if retained_bad_entry_time_count or retained_bad_exit_time_count:
+        time_note += (
+            f", ⚠️時間格式錯誤但因 direct net pnl 保留"
+            f"（進場 {retained_bad_entry_time_count} 筆、出場 {retained_bad_exit_time_count} 筆）；"
+            "錯誤時間已標記 unknown，不納入時間型指標"
+        )
+    timezone_note = (
+        ", 帶時區時間已統一轉為 UTC 後比較"
+        if all_times_are_aware else
+        ", 無時區時間視為同一使用者當地時區"
+        if time_awareness == {False} else ""
+    )
 
     return TradeLog(
         trades=trades,
@@ -468,7 +1113,9 @@ def load_trades(
             f"{path.name} ({fmt}"
             + (", 以 Big5/cp950 編碼讀取 — 若見亂碼請改存 CSV UTF-8"
                if used_encoding == "cp950" else "")
-            + f", 載入 {len(trades)} 筆, 略過 {skipped} 筆{warn}{lot_note})"
+            + f", 載入 {len(trades)} 筆, 略過 {skipped} 筆"
+            f"{warn}{lot_note}{time_note}{timezone_note}{side_note}{currency_note}"
+            f"{fee_note}{direct_pnl_note})"
         ),
         account_label=path.stem,
     )

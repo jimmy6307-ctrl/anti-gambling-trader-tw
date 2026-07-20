@@ -18,7 +18,7 @@ from .profiler import StrategyProfile
 from ..verdict.judge import Verdict
 
 
-def _verdict_banner(verdict: Verdict) -> str:
+def _verdict_banner(verdict: Verdict, stage=None) -> str:
     """產生嵌入程式碼頂端的裁決橫幅(Python 註解形式)。"""
     lines = [
         "# " + "=" * 72,
@@ -30,6 +30,11 @@ def _verdict_banner(verdict: Verdict) -> str:
         "# " + "-" * 72,
         "# 理由:",
     ]
+    if stage is not None:
+        lines += [
+            f"# 目前階段: {stage.title}",
+            f"# 階段原因: {stage.reason}",
+        ]
     for r in verdict.reasons:
         lines.append(f"#   - {r}")
     if verdict.red_flags:
@@ -55,6 +60,12 @@ def _entry_logic_hint(profile: StrategyProfile) -> str:
     先前硬編 8 格導致兩個模板產出的骨架都是 IndentationError、無法編譯。
     """
     code = profile.style_code
+    if code in ("timing_unavailable", "timing_incomplete"):
+        return (
+            "# 進出場時間不完整，無法可靠判定短線、波段或長期風格。\n"
+            "# 請先補齊時間，再依你事前寫下的規則建立訊號；本工具不猜。\n"
+            "signal = False  # TODO: 補齊資料後填入可回測規則"
+        )
     if code in ("scalp_intraday", "swing_short"):
         return (
             "# 你的交易偏短線。常見可回測的進場訊號範例:\n"
@@ -83,6 +94,7 @@ def generate_skeleton(
     verdict: Verdict,
     *,
     framework: str = "backtrader",
+    stage=None,
 ) -> str:
     """產生策略骨架原始碼字串。
 
@@ -94,14 +106,18 @@ def generate_skeleton(
     Returns:
         可寫入 .py 檔的完整原始碼字串
     """
-    banner = _verdict_banner(verdict)
-    discourage = verdict.should_discourage
+    banner = _verdict_banner(verdict, stage)
+    discourage = verdict.should_discourage or (
+        stage is not None and stage.code != "tiny_live_validation"
+    )
     entry_hint = _entry_logic_hint(profile)
 
     # 是否預設禁用:若裁決勸退,程式碼一啟動就會擋下,逼使用者正視
     guard = "True" if discourage else "False"
 
-    side_default = "long" if profile.dominant_side.value == "long" else "short"
+    side_default = (
+        "long" if profile.dominant_side.value == "long" else "short"
+    ) if profile.side_metrics_available else "unknown (原始紀錄未提供方向)"
 
     if framework == "backtrader":
         body = _BACKTRADER_TEMPLATE.format(

@@ -8,6 +8,7 @@ from .metrics.breakeven import compute_break_even
 from .metrics.performance import PerformanceMetrics, fmt_ratio
 from .markets import uncovered_cost_warnings
 from .models import TradeLog
+from .onboarding import stage_from_components
 from .strategy.profiler import StrategyProfile
 from .verdict.judge import Verdict, VerdictLevel
 
@@ -41,31 +42,64 @@ def render_text_report(
     L.append(f"  {verdict.headline}")
     L.append("")
 
+    # 新手最先需要的不是術語，而是「現在到底能做哪一步」。這個分流比
+    # 裁決更保守：樣本內通過但樣本外未延續，仍只建議紙上模擬。
+    stage = stage_from_components(verdict=verdict, metrics=metrics, oos=oos)
+    L.append("【目前適合的階段】")
+    L.append(f"  {stage.title}")
+    L.append(f"  原因: {stage.reason}")
+    L.append(f"  先做: {stage.next_actions[0]}")
+    L.append("")
+
     # ── 核心數字 ──
     m = metrics
+    currency = f" {m.pnl_currency}" if m.pnl_currency else ""
     L.append("【核心績效】")
     L.append(f"  交易筆數      : {m.total_trades}(勝 {m.wins} / 負 {m.losses})")
     L.append(f"  勝率          : {m.win_rate:.1%}(含打平;打平 {m.breakeven} 筆)")
     L.append(f"  盈虧比        : {fmt_ratio(m.payoff_ratio)}(平均賺 {_money(m.avg_win)} / 平均賠 {_money(m.avg_loss)})")
     L.append(f"  獲利因子      : {fmt_ratio(m.profit_factor)}")
-    L.append(f"  每筆期望值    : {_money(m.expectancy)}  ← 最關鍵的單一數字")
-    L.append(f"  總損益        : {_money(m.total_pnl)}(已扣估計成本 {_money(m.total_fees)})")
-    dd_pct_txt = (f"{m.max_drawdown_pct:.1%}" if m.drawdown_pct_reliable
-                  else "%無法計算 — 缺進場價/數量,沒有資本基準")
-    L.append(f"  最大回撤      : {_money(m.max_drawdown)}({dd_pct_txt})")
-    L.append(f"  最長連虧      : {m.max_consecutive_losses} 次")
-    L.append(f"  夏普 / 索提諾 : {fmt_ratio(m.sharpe)} / {fmt_ratio(m.sortino)}(每筆基準,非年化)")
+    L.append(f"  每筆期望值    : {_money(m.expectancy)}{currency}  ← 最關鍵的單一數字")
+    L.append(f"  總損益        : {_money(m.total_pnl)}{currency}")
+    L.append(
+        f"  費用揭露      : {_money(m.total_fees)}{currency}"
+        "（直接 pnl 須已扣成本；此欄不會重複扣除）"
+    )
+    if m.sequence_metrics_reliable:
+        dd_pct_txt = (
+            f"{m.max_drawdown_pct:.1%}" if m.drawdown_pct_reliable
+            else "%無法計算 — 缺可靠資本/帳戶權益基準"
+        )
+        L.append(f"  最大回撤      : {_money(m.max_drawdown)}{currency}({dd_pct_txt})")
+        L.append(f"  最長連虧      : {m.max_consecutive_losses} 次")
+    else:
+        L.append("  最大回撤      : 無法計算（出場先後順序不可靠）")
+        L.append("  最長連虧      : 無法計算（出場先後順序不可靠）")
+    if m.return_metrics_reliable:
+        L.append(f"  夏普 / 索提諾 : {fmt_ratio(m.sharpe)} / {fmt_ratio(m.sortino)}(每筆基準,非年化)")
+    else:
+        L.append("  夏普 / 索提諾 : 無法計算（缺可信價量或契約乘數）")
     L.append(f"  單筆最大賺/賠 : {_money(m.largest_win)} / {_money(m.largest_loss)}")
     # 「最賺一筆佔比」只在有 2 筆以上獲利時才有意義(僅 1 筆時必為 100%,是噪音)
     if m.wins > 1:
         L.append(f"  最賺一筆佔比  : {m.top_trade_pnl_share:.1%} 的總獲利")
+    if m.sequence_note:
+        L.append(f"  ⚠ {m.sequence_note}")
+    if m.return_note:
+        L.append(f"  ⚠ {m.return_note}")
+    if getattr(m, "drawdown_note", ""):
+        L.append(f"  ⚠ {m.drawdown_note}")
+    if getattr(m, "currency_note", ""):
+        L.append(f"  ⚠ {m.currency_note}")
     L.append("")
 
     # ── 統計顯著性 ──
     sig = verdict.significance
     L.append("【這是優勢,還是運氣?(統計檢定)】")
-    L.append(f"  每筆平均損益          : {_money(sig.mean)}")
-    L.append(f"  95% 信賴區間          : [{_money(sig.ci_low)}, {_money(sig.ci_high)}]")
+    L.append(f"  每筆平均損益          : {_money(sig.mean)}{currency}")
+    L.append(
+        f"  95% 信賴區間          : [{_money(sig.ci_low)}, {_money(sig.ci_high)}]{currency}"
+    )
     L.append(f"  t 檢定 p 值           : {sig.p_value_t:.4f}")
     L.append(f"  Bootstrap p 值        : {sig.p_value_bootstrap:.4f}")
     verdict_word = "顯著為正(像真優勢)" if sig.is_significant else "不顯著(無法排除是運氣)"
@@ -93,12 +127,15 @@ def render_text_report(
     if oos is not None:
         L.append("【樣本外驗證(揭穿過度配適 / 倖存者偏差)】")
         L.append(f"  {oos.headline}")
-        L.append(
-            f"  樣本內: {oos.in_sample.n_trades} 筆, 期望值 {_money(oos.in_sample.expectancy)}"
-        )
-        L.append(
-            f"  樣本外: {oos.out_sample.n_trades} 筆, 期望值 {_money(oos.out_sample.expectancy)}"
-        )
+        if getattr(oos, "available", True):
+            L.append(
+                f"  樣本內: {oos.in_sample.n_trades} 筆, 期望值 {_money(oos.in_sample.expectancy)}{currency}"
+            )
+            L.append(
+                f"  樣本外: {oos.out_sample.n_trades} 筆, 期望值 {_money(oos.out_sample.expectancy)}{currency}"
+            )
+        else:
+            L.append(f"  無法切分: {oos.unavailable_reason}")
         for line in oos.interpretation:
             L.append(f"    - {line}")
         L.append("")
@@ -106,7 +143,10 @@ def render_text_report(
     # ── 策略輪廓 ──
     L.append("【你的交易模式(反推)】")
     L.append(f"  風格          : {profile.style}")
-    L.append(f"  平均持倉      : {profile.avg_holding_days:.1f} 天")
+    if profile.timing_metrics_available:
+        L.append(f"  平均持倉      : {profile.avg_holding_days:.1f} 天")
+    else:
+        L.append("  平均持倉      : 無法計算（缺少可靠的進出場時間）")
     L.append(f"  標的集中度    : 前三大標的佔 {profile.symbol_concentration:.0%}(共 {profile.distinct_symbols} 檔)")
     for note in profile.notes:
         L.append(f"  ⚠ {note}")

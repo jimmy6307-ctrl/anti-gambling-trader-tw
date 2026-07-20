@@ -134,16 +134,19 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
     #     硬切點(payoff<0.4)會漏掉「payoff 剛好 0.5、勝率 0.7」這種
     #     正 EV 卻極脆弱的結構 —— 勝率只要小幅下滑就會由正翻負。
     #     用連續的 edge_margin 補上,但保持白話可解釋。
-    if m.expectancy > 0 and m.win_rate > 0.5 and m.losses > 0:
-        breakeven_payoff = (1 - m.win_rate) / m.win_rate   # 讓期望值 = 0 的盈虧比
+    if m.expectancy > 0 and m.wins > 0 and m.losses > 0:
+        # 勝率分母包含打平交易,所以敗率必須用實際 losses/total；
+        # (1-win_rate) 會把打平全當虧損,把門檻誇大。
+        loss_rate = m.losses / m.total_trades
+        breakeven_payoff = loss_rate / m.win_rate   # 讓期望值 = 0 的盈虧比
         edge_margin = m.payoff_ratio - breakeven_payoff
         if 0 < edge_margin < 0.25 * max(breakeven_payoff, 1e-9):
             flags.append(RedFlag(
                 "thin_edge_margin", "medium",
                 f"你的盈虧比 {fmt_ratio(m.payoff_ratio)} 只比打平門檻 {breakeven_payoff:.2f} "
                 f"高一點點(安全邊際 {edge_margin:.2f})。"
-                f"以你 {m.win_rate:.0%} 的勝率,只要勝率稍微下滑,期望值就會由正翻負;"
-                "而且平均要贏好幾次,才補得回一次大虧。這種優勢很脆弱。"
+                f"以你 {m.win_rate:.0%} 的勝率,只要勝率、平均獲利、平均虧損或成本"
+                "稍微惡化,期望值就會由正翻負。這種優勢很脆弱。"
             ))
 
     # 4. 極端回撤:即使最終獲利,過程中也曾瀕臨毀滅。
@@ -151,7 +154,11 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
     #    裁決(決策樹只用 high 警訊降級,medium 擋不住)。寧可錯殺。
     #    只有回撤 % 可靠(有資本基準)時才發:pnl-only 資料的 % 是
     #    「無法計算」,報告都這麼說了,裁決卻拿它定罪是兩個通道打架。
-    if m.drawdown_pct_reliable and m.max_drawdown_pct > 0.5:
+    if (
+        m.sequence_metrics_reliable
+        and m.drawdown_pct_reliable
+        and m.max_drawdown_pct > 0.5
+    ):
         flags.append(RedFlag(
             "severe_drawdown", "high",
             f"最大回撤達 {m.max_drawdown_pct:.0%}。"
@@ -159,7 +166,7 @@ def _scan_red_flags(m: PerformanceMetrics, sig: SignificanceResult) -> list[RedF
         ))
 
     # 5. 連續虧損過長:心理上極難承受,實務上常導致中途放棄或亂改規則
-    if m.max_consecutive_losses >= 8:
+    if m.sequence_metrics_reliable and m.max_consecutive_losses >= 8:
         flags.append(RedFlag(
             "long_losing_streak", "medium",
             f"曾連續虧損 {m.max_consecutive_losses} 次。"
@@ -207,10 +214,14 @@ def judge(
     pnls = [t.pnl or 0.0 for t in log]
     sig = test_expectancy_positive(pnls, n_bootstrap=n_bootstrap)
 
-    # 所需樣本量:有足夠實際損益時,用「真實樣本變異」估算(較貼近現實);
-    # 否則退回二項模型(那只是最樂觀的下限,因為它假設組內零變異)。
+    # 所需樣本量:有足夠實際損益,或至少同時看過輸贏兩種結果時,用
+    # 「真實樣本變異」估算(較貼近現實)。只有單一結果類型的小樣本才
+    # 退回二項模型;它只是最樂觀的下限,因為它假設組內零變異。
+    #
+    # 不能只把 total>=10 當開關:少於10筆且含打平交易時,二項模型會把
+    # 打平全算成失敗(1-win_rate),甚至把實際正期望錯算成負 edge→9999。
     req = None
-    if len(pnls) >= 10:
+    if len(pnls) >= 10 or (m.wins > 0 and m.losses > 0):
         req = required_sample_size_from_pnls(pnls)
     if req is None:
         req = required_sample_size(m.win_rate, m.payoff_ratio)
@@ -250,7 +261,8 @@ def judge(
                 "再漂亮的勝率與獲利,都可能只是隨機波動。"
             )
         advice += [
-            f"在用小額(可承受全損的金額)累積到約 {max(min_trades, req)} 筆交易前,不要加大部位。",
+            f"先用紙上模擬累積到約 {max(min_trades, req)} 筆連續、未挑選的已平倉交易;"
+            "在證據足夠前不要投入真錢。",
             "把每一筆交易的『進場理由』記錄下來(用 tag 欄位),日後才能驗證是哪套邏輯有效。",
         ]
 

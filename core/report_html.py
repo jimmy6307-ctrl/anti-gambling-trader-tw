@@ -85,6 +85,18 @@ def _verdict_color(level: str) -> str:
     }.get(level, "#6b7280")
 
 
+def _stage_colors(code: str) -> tuple[str, str, str]:
+    """階段卡片的背景、邊框、文字色；停手不可和通過共用綠色。"""
+
+    return {
+        "stop_real_money": ("#241414", "#7f1d1d", "#fca5a5"),
+        "paper_only": ("#241e0f", "#854d0e", "#fde68a"),
+        "paper_until_oos": ("#241e0f", "#854d0e", "#fde68a"),
+        "paper_until_risk_data": ("#241e0f", "#854d0e", "#fde68a"),
+        "tiny_live_validation": ("#102019", "#285b43", "#9ad9b5"),
+    }.get(code, ("#131722", "#374151", "#d1d4dc"))
+
+
 def render_html_report(
     result,
     *,
@@ -102,8 +114,13 @@ def render_html_report(
     """
     v = result.verdict
     m = result.metrics
+    currency = f" {m.pnl_currency}" if m.pnl_currency else ""
     oos = result.out_of_sample
     color = _verdict_color(v.level.value)
+    from .onboarding import stage_from_analysis
+
+    stage = stage_from_analysis(result)
+    stage_bg, stage_border, stage_text = _stage_colors(stage.code)
 
     # 逐策略表(只有描述統計,不發徽章)
     tag_rows = ""
@@ -111,8 +128,8 @@ def render_html_report(
         note = "(樣本少)" if tv.low_sample else ""
         tag_rows += (
             f"<tr><td>{h(tv.tag)}</td><td class='num'>{tv.n_trades}</td>"
-            f"<td class='num'>{tv.expectancy:,.2f}</td>"
-            f"<td class='num'>{tv.total_pnl:,.2f}</td>"
+            f"<td class='num'>{tv.expectancy:,.2f}{h(currency)}</td>"
+            f"<td class='num'>{tv.total_pnl:,.2f}{h(currency)}</td>"
             f"<td>{h(tv.descriptor)} {h(note)}</td></tr>"
         )
     tag_table = (
@@ -162,7 +179,12 @@ def render_html_report(
     # 標題跟著 granularity 走:紀錄跨 24 個月以上 analyze_trend 會自動改季度,
     # 把季度表硬標成「月報」是張冠李戴。
     trend_html = ""
-    if trend is not None and trend.buckets:
+    if trend is not None and not getattr(trend, "available", True):
+        trend_html = (
+            "<h2>時間趨勢</h2>"
+            f"<div class='alert'>{h(trend.unavailable_reason)}</div>"
+        )
+    elif trend is not None and trend.buckets:
         period_word = "季" if trend.granularity == "quarter" else "月"
         rows = ""
         for b in trend.buckets:
@@ -217,7 +239,34 @@ def render_html_report(
         )
 
     sig = v.significance
-    pnls = [t.pnl or 0.0 for t in result.log]
+    metric_notes = [
+        note for note in (
+            getattr(m, "return_note", ""),
+            getattr(m, "drawdown_note", ""),
+            getattr(m, "currency_note", ""),
+        ) if note
+    ]
+    metric_alert = (
+        "<div class='alert'>" + "<br>".join(h(note) for note in metric_notes) + "</div>"
+        if metric_notes else ""
+    )
+    drawdown_display = "無法計算"
+    if m.sequence_metrics_reliable:
+        pct = (
+            f"{m.max_drawdown_pct:.1%}"
+            if m.drawdown_pct_reliable else "% 無法計算"
+        )
+        drawdown_display = f"{m.max_drawdown:,.2f}{currency}（{pct}）"
+    if m.sequence_metrics_reliable:
+        pnls = [t.pnl or 0.0 for t in result.log.sorted_by_time()]
+        equity_html = f"<h2>累積損益曲線</h2>{_equity_svg(pnls)}"
+    else:
+        equity_html = (
+            "<h2>累積損益曲線</h2>"
+            "<div class='alert'>無法建立時序曲線："
+            f"{h(m.sequence_note or '出場先後順序不可靠。')}"
+            " 本工具不會用檔案列順序或佔位日期假裝時間。</div>"
+        )
 
     return f"""<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
@@ -233,6 +282,9 @@ h2{{font-size:16px;margin:28px 0 8px;border-bottom:1px solid #1e222d;padding-bot
 .verdict{{background:#131722;border-left:5px solid {color};
 padding:16px 18px;border-radius:8px;margin:16px 0}}
 .verdict .lv{{color:{color};font-weight:700;font-size:18px}}
+.stage{{background:{stage_bg};border:1px solid {stage_border};border-radius:8px;
+padding:14px 16px;margin:12px 0 20px}}
+.stage b{{color:{stage_text}}}
 table{{width:100%;border-collapse:collapse;font-size:14px}}
 th,td{{padding:8px 10px;border-bottom:1px solid #1e222d;text-align:left}}
 th{{color:#8b94a3;font-weight:500}}
@@ -255,24 +307,31 @@ color:#6b7280;font-size:12px}}
   <div>{h(v.headline)}</div>
 </div>
 
+<div class="stage">
+  <b>目前適合的階段</b><br>
+  {h(stage.title)}<br>
+  <span class="muted">{h(stage.reason)}</span>
+</div>
+
 <h2>核心績效</h2>
 <div class="grid">
   <div class="stat"><div class="k">交易筆數</div><div class="v">{m.total_trades}</div></div>
   <div class="stat"><div class="k">勝率</div><div class="v">{m.win_rate:.1%}</div></div>
   <div class="stat"><div class="k">盈虧比</div><div class="v">{h(_fr(m.payoff_ratio))}</div></div>
-  <div class="stat"><div class="k">每筆期望值</div><div class="v">{m.expectancy:,.2f}</div></div>
-  <div class="stat"><div class="k">總損益</div><div class="v">{m.total_pnl:,.2f}</div></div>
-  <div class="stat"><div class="k">最大回撤</div><div class="v">{(f"{m.max_drawdown_pct:.1%}" if m.drawdown_pct_reliable else "無法計算")}</div></div>
+  <div class="stat"><div class="k">每筆期望值</div><div class="v">{m.expectancy:,.2f}{h(currency)}</div></div>
+  <div class="stat"><div class="k">總損益</div><div class="v">{m.total_pnl:,.2f}{h(currency)}</div></div>
+  <div class="stat"><div class="k">最大回撤</div><div class="v">{h(drawdown_display)}</div></div>
 </div>
 
-<h2>累積損益曲線</h2>
-{_equity_svg(pnls)}
+{metric_alert}
+
+{equity_html}
 
 <h2>這是優勢,還是運氣?</h2>
 <table><tbody>
-<tr><td>每筆平均損益</td><td class="num">{sig.mean:,.2f}</td></tr>
+<tr><td>每筆平均損益</td><td class="num">{sig.mean:,.2f}{h(currency)}</td></tr>
 <tr><td>95% 信賴區間(雙尾)</td>
-    <td class="num">[{sig.ci_low:,.2f}, {sig.ci_high:,.2f}]</td></tr>
+    <td class="num">[{sig.ci_low:,.2f}, {sig.ci_high:,.2f}]{h(currency)}</td></tr>
 <tr><td>t 檢定 p 值</td><td class="num">{sig.p_value_t:.4f}</td></tr>
 <tr><td>Bootstrap p 值(單尾)</td><td class="num">{sig.p_value_bootstrap:.4f}</td></tr>
 </tbody></table>
@@ -300,11 +359,18 @@ def render_share_card(result, *, width: int = 600) -> str:
     v = result.verdict
     m = result.metrics
     color = _verdict_color(v.level.value)
+    from .onboarding import stage_from_analysis
+
+    stage = stage_from_analysis(result)
+    stage_bg, stage_border, stage_text = _stage_colors(stage.code)
+    currency = str(getattr(m, "pnl_currency", "") or "幣別不明")
+    if not getattr(m, "currency_reliable", False) and currency != "幣別不明":
+        currency += "（推定）"
     guru_line = ""
     if result.follow_guru is not None and result.follow_guru.expectancy < 0:
         guru_line = (
             f'<div class="guru">聽老師 / 跟單的 {result.follow_guru.n_trades} 筆交易,'
-            f"合計 {result.follow_guru.total_pnl:,.0f}</div>"
+            f"合計 {result.follow_guru.total_pnl:,.0f} {h(currency)}</div>"
         )
 
     return f"""<!doctype html>
@@ -317,6 +383,9 @@ justify-content:center;min-height:100vh;font-family:system-ui,"Microsoft JhengHe
 border-top:6px solid {color};color:#d1d4dc;box-shadow:0 8px 40px rgba(0,0,0,.5)}}
 .badge{{color:{color};font-size:24px;font-weight:800}}
 .head{{margin:10px 0 18px;font-size:15px;line-height:1.6}}
+.stage{{margin:0 0 16px;padding:10px 12px;background:{stage_bg};
+border:1px solid {stage_border};border-radius:8px;color:{stage_text};
+font-size:13px;font-weight:700;line-height:1.5}}
 .row{{display:flex;justify-content:space-between;padding:9px 0;
 border-bottom:1px solid #1e222d;font-size:14px}}
 .row b{{font-variant-numeric:tabular-nums}}
@@ -327,11 +396,12 @@ border:1px solid #7f1d1d;border-radius:8px;font-size:13px;color:#fca5a5}}
 <div class="card">
   <div class="badge">{h(v.level.badge)}</div>
   <div class="head">{h(v.headline)}</div>
+  <div class="stage">目前適合的階段：{h(stage.title)}</div>
   <div class="row"><span>交易筆數</span><b>{m.total_trades}</b></div>
   <div class="row"><span>勝率</span><b>{m.win_rate:.0%}</b></div>
   <div class="row"><span>盈虧比</span><b>{h(_fr(m.payoff_ratio))}</b></div>
-  <div class="row"><span>每筆期望值</span><b>{m.expectancy:,.0f}</b></div>
-  <div class="row"><span>總損益</span><b>{m.total_pnl:,.0f}</b></div>
+  <div class="row"><span>每筆期望值</span><b>{m.expectancy:,.0f} {h(currency)}</b></div>
+  <div class="row"><span>總損益</span><b>{m.total_pnl:,.0f} {h(currency)}</b></div>
   {guru_line}
   <div class="foot">
     反詐投資王 · 用統計學判斷這是優勢還是賭博<br>

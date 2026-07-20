@@ -229,6 +229,52 @@ def test_scaffold_discouraged_disables_live():
     assert "allow_live_trading: false" in config.content
 
 
+def test_scaffold_live_flag_requires_complete_tiny_live_stage():
+    from core.onboarding import StageAssessment
+
+    paper_stage = StageAssessment(
+        code="paper_until_oos",
+        title="仍只適合紙上模擬",
+        reason="樣本外尚未確認",
+        next_actions=("累積新資料",),
+        exit_code=2,
+    )
+    tiny_stage = StageAssessment(
+        code="tiny_live_validation",
+        title="只可極小額驗證",
+        reason="樣本外與風險資料通過",
+        next_actions=("限制風險",),
+        exit_code=0,
+    )
+
+    for opts in (
+        ScaffoldOptions(project_name="no-analysis"),
+        ScaffoldOptions(project_name="paper-stage", stage=paper_stage),
+    ):
+        config = next(
+            f for f in generate_project(opts)
+            if f.relpath == "config.example.yaml"
+        )
+        assert "allow_live_trading: false" in config.content
+        assert "stage_code:" in config.content
+
+    paper_config = next(
+        f for f in generate_project(
+            ScaffoldOptions(project_name="paper-reason", stage=paper_stage)
+        )
+        if f.relpath == "config.example.yaml"
+    )
+    assert "樣本外尚未確認" in paper_config.content
+
+    config = next(
+        f for f in generate_project(
+            ScaffoldOptions(project_name="tiny-stage", stage=tiny_stage)
+        )
+        if f.relpath == "config.example.yaml"
+    )
+    assert "allow_live_trading: true" in config.content
+
+
 def test_scaffold_writes_runnable_project():
     """產出的專案應能寫入磁碟,且 main.py 含安全開關。"""
     with tempfile.TemporaryDirectory() as d:
