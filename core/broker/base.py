@@ -32,8 +32,13 @@ class Order:
     order_type: OrderType = OrderType.MARKET
     limit_price: Optional[float] = None      # 限價單必填
     client_tag: Optional[str] = None         # 對應策略標籤,方便日後回頭分析
+    client_order_id: Optional[str] = None    # 券商委託識別碼；不可和策略標籤混用
 
     def validate(self) -> None:
+        if not isinstance(self.side, OrderSide):
+            raise ValueError("委託方向必須是 OrderSide.BUY 或 OrderSide.SELL")
+        if not isinstance(self.order_type, OrderType):
+            raise ValueError("委託類型必須是 OrderType.MARKET 或 OrderType.LIMIT")
         if self.quantity <= 0:
             raise ValueError("委託數量必須大於 0")
         if self.order_type == OrderType.LIMIT and self.limit_price is None:
@@ -60,9 +65,12 @@ class Position:
     quantity: float          # 正=多單,負=空單
     avg_price: float
     market_price: float = 0.0
+    cost_basis_known: bool = True
 
     @property
     def unrealized_pnl(self) -> float:
+        if not self.cost_basis_known:
+            raise ValueError("此部位沒有可靠成本基準，不能計算未實現損益")
         return (self.market_price - self.avg_price) * self.quantity
 
 

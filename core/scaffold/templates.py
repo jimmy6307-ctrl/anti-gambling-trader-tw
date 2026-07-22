@@ -14,6 +14,11 @@ def readme(opts, chart_lib, broker_tmpl, discouraged: bool, verdict_headline: st
     broker_name = broker_tmpl.name if broker_tmpl else "紙上模擬 PaperBroker(預設)"
     broker_install = broker_tmpl.sdk_install if broker_tmpl else "(無需額外安裝)"
     broker_note = f"\n> ⚠️ {broker_tmpl.notes}\n" if broker_tmpl else ""
+    broker_validation = (
+        "Pionex 官方現貨 API 未列 sandbox；只能先用本機 PaperBroker 驗證。"
+        if broker_tmpl and broker_tmpl.key == "pionex"
+        else "務必先用券商的測試網 / 模擬模式確認無誤。"
+    )
     discourage_block = ""
     if discouraged:
         discourage_block = f"""
@@ -65,9 +70,9 @@ python main.py            # 用 PaperBroker 跑一遍,並產生圖表
 券商:{broker_name}
 安裝:`{broker_install}`
 {broker_note}
-1. 打開 `brokers/` 下的範例框架,填入你的 API key 與待實作的 `TODO`。
+1. 打開 `brokers/` 下的範例框架,依說明用環境變數或設定提供連線資料,並完成 `TODO`。
 2. 在 `broker_setup.py` 把 `build_broker()` 改成回傳你的券商實例。
-3. **務必先用券商的測試網 / 模擬模式**確認無誤。
+3. **{broker_validation}**
 
 ## 從紙上模擬切到真實下單（高風險）
 
@@ -80,6 +85,9 @@ python main.py            # 用 PaperBroker 跑一遍,並產生圖表
 3. 在 `main.py` 把 `ALLOW_LIVE_TRADING` 改為 `True`。
 4. Runtime 會重新驗證上述所有設定,最後才呼叫券商的
    `confirm_live_trading(i_understand_the_risk=True)`。
+5. `main.py` 內建的是歷史／示範 K 線 replay，因此偵測到 live broker 時仍會硬性退出；
+   不會把 120 根歷史訊號一次送成真單。真實驗證必須另寫只處理「最新一根已完成 K 線」
+   的 runner，並接上可證明為即時且無前視的資料來源。
 
 缺欄位、錯誤型別、其他 stage 或 YAML 損壞都會維持封鎖。即使通過全部閘門,
 也只代表程式允許你自行做極小額驗證,不代表適合重押或全職交易。
@@ -113,8 +121,8 @@ def _broker_keys_comment() -> str:
     return " | ".join(["paper"] + sorted(BROKER_TEMPLATES.keys()))
 
 
-# 各券商建構子需要的 credentials 欄位(與 registry 範本的 __init__ 簽名一致)。
-# 固定產 api_key/api_secret 會讓 12 個券商有 9 個照表填卻對不上建構子
+# 各券商建構子需要的 credentials 欄位；Pionex 只保存環境變數名稱，不落盤保存 key。
+# 固定產 api_key/api_secret 會讓 13 個券商有 9 個照表填卻對不上建構子
 # (第 8 輪券商層稽核逐一實測的簽名)。
 _CREDENTIAL_FIELDS: dict[str, list[str]] = {
     "binance": ['api_key: ""', 'api_secret: ""', "testnet: true"],
@@ -129,6 +137,9 @@ _CREDENTIAL_FIELDS: dict[str, list[str]] = {
              'password: ""', "sandbox: true"],
     "okx": ['api_key: ""', 'api_secret: ""', 'passphrase: ""', "sandbox: true"],
     "bybit": ['api_key: ""', 'api_secret: ""', "testnet: true"],
+    "pionex": ['api_key_env: "PIONEX_API_KEY"',
+               'api_secret_env: "PIONEX_API_SECRET"',
+               'quote_currency: "USDT"', "timeout: 10.0"],
     "tradier": ['access_token: ""', 'account_id: ""', "sandbox: true"],
 }
 
@@ -157,7 +168,8 @@ symbols:
 
 broker: {opts.broker}        # 可選:{_broker_keys_comment()}
 
-# 真實券商連線資訊（紙上模擬不需要）。欄位已對應 brokers/ 範本的建構子簽名。
+# 真實券商連線資訊（紙上模擬不需要）。Pionex 只填環境變數名稱；其他範本欄位
+# 對應 brokers/ 內的建構子簽名。
 # 請勿提交到 git。
 credentials:
 {_credentials_block(opts.broker)}
@@ -246,6 +258,11 @@ class Strategy:
             if position is None and ma_fast > ma_slow:
                 return Signal("buy", "5日均線上穿20日")
         """
+        # 某些現貨 balance API 只有數量、沒有成本價。未知成本時用示範 K 線
+        # 自動停損/停利可能立刻賣掉真實持倉，因此一律 hold，等使用者補可靠成本。
+        if position is not None and not getattr(position, "cost_basis_known", True):
+            return Signal("hold", "成本基準未知，禁止自動停損／停利")
+
         # ── 出場:停損 / 停利(預設邏輯,建議保留)──
         if position is not None and history:
             price = history[-1]["close"]
@@ -273,7 +290,26 @@ def broker_setup_py(opts, broker_tmpl) -> str:
         # 從範本自動取得類別名,新增券商不必在此維護對照表
         cls = broker_tmpl.class_name
         extra_import = f"# from brokers.{broker_tmpl.key}_broker import {cls}\n"
-        body = f'''    # 預設仍回傳紙上模擬;要接真實券商,取消下面註解並填入你的金鑰。
+        if broker_tmpl.key == "pionex":
+            body = f'''    # 預設仍回傳紙上模擬。Pionex 官方現貨 API 沒有文件化 sandbox，
+    # 所以金鑰只從環境變數讀取，不寫進 config.yaml。
+    if config.get("broker") == "pionex":
+        # import os
+        # creds = config.get("credentials", {{}})
+        # broker = {cls}(
+        #     api_key=os.environ[creds.get("api_key_env", "PIONEX_API_KEY")],
+        #     api_secret=os.environ[creds.get("api_secret_env", "PIONEX_API_SECRET")],
+        #     quote_currency=creds.get("quote_currency", "USDT"),
+        #     timeout=creds.get("timeout", 10.0),
+        # )
+        # return broker
+        pass
+    return PaperBroker(
+        cash=config.get("paper", {{}}).get("starting_cash", 1_000_000),
+        fee_rate=config.get("paper", {{}}).get("fee_rate", 0.001),
+    )'''
+        else:
+            body = f'''    # 預設仍回傳紙上模擬;要接真實券商,取消下面註解並填入你的金鑰。
     if config.get("broker") == "{broker_tmpl.key}":
         # creds = config.get("credentials", {{}})
         # ⚠️ 建構子參數依券商而異(如 IBKR 是 host/port/client_id,不是金鑰)——
@@ -347,6 +383,7 @@ def main_py(opts, chart_lib, broker_tmpl, discouraged: bool) -> str:
 """
 
 import os
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 
 import yaml
 
@@ -451,14 +488,44 @@ def maybe_enable_live(broker: BrokerAdapter, config: dict) -> None:
     broker.confirm_live_trading(i_understand_the_risk=True)
 
 
+def calculate_order_quantity(budget, price, market: str):
+    """按市場保守計算數量；永遠不把不足一單位強制放大成 1。"""
+    try:
+        budget_d = Decimal(str(budget))
+        price_d = Decimal(str(price))
+    except (InvalidOperation, ValueError):
+        return 0
+    if not budget_d.is_finite() or not price_d.is_finite():
+        return 0
+    if budget_d <= 0 or price_d <= 0:
+        return 0
+    raw = budget_d / price_d
+    if str(market).lower() == "crypto":
+        # 先保守截到 8 位；交易所 adapter 仍會按即時 symbol 規格再次驗證。
+        return float(raw.quantize(Decimal("0.00000001"), rounding=ROUND_DOWN))
+    return int(raw)
+
+
+def reject_live_historical_replay(broker: BrokerAdapter) -> None:
+    """內建 run() 是歷史/示範 replay，絕不允許它呼叫真實券商。"""
+    if getattr(broker, "is_live", False):
+        raise SystemExit(
+            "⛔ main.py 的 run() 會重播歷史／示範 K 線，禁止連接真實券商。\\n"
+            "   否則歷史訊號可能被一次送成多張真單。請另寫只處理最新已完成 K 線、\\n"
+            "   且資料來源可驗證為即時的 live runner；不要解除這道閘門。"
+        )
+
+
 def run():
     config = load_config()
     broker = build_broker(config)
-    broker.connect()
     maybe_enable_live(broker, config)
+    reject_live_historical_replay(broker)
+    broker.connect()  # live broker 已在上一步退出；只有 paper 會走到這裡
 
     strategy = Strategy(config)
     symbols = config.get("symbols", {opts.symbols!r})
+    market = str(config.get("market", {opts.market!r}))
     risk = config.get("risk", {{}})
     max_pct = risk.get("max_position_pct", 0.2)
 
@@ -491,7 +558,9 @@ def run():
             if sig.action == "buy" and pos is None:
                 acct = broker.get_account()
                 budget = acct.equity * max_pct
-                qty = max(1, int(budget / bar["close"]))
+                qty = calculate_order_quantity(budget, bar["close"], market)
+                if qty <= 0:
+                    continue  # 預算不足一單位就不下單，不可偷偷放大部位
                 r = broker.place_order(Order(symbol, OrderSide.BUY, qty,
                                              client_tag=sig.reason))
                 if r.ok:

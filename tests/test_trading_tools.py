@@ -6,9 +6,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import re
 import sys
 import tempfile
 import types
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,11 +22,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.broker import (  # noqa: E402
+    AccountInfo,
     Order,
     OrderResult,
     OrderSide,
     OrderType,
     PaperBroker,
+    Position,
     list_brokers,
 )
 from core.broker.base import BrokerAdapter  # noqa: E402
@@ -57,6 +64,62 @@ def _execute_generated_main(opts: ScaffoldOptions) -> dict:
     with patch.dict(sys.modules, modules):
         exec(compile(main_src, "generated/main.py", "exec"), namespace)
     return namespace
+
+
+def _execute_generated_strategy(opts: ScaffoldOptions) -> dict:
+    strategy_src = next(
+        f.content for f in generate_project(opts) if f.relpath == "strategy.py"
+    )
+    module = types.ModuleType("generated_scaffold_strategy")
+    with patch.dict(sys.modules, {module.__name__: module}):
+        exec(
+            compile(strategy_src, "generated/strategy.py", "exec"),
+            module.__dict__,
+        )
+    return module.__dict__
+
+
+def _execute_broker_template(key: str) -> dict:
+    """把 scaffold 內嵌 broker 範本當成獨立產物載入。"""
+    from core.broker import BROKER_TEMPLATES
+
+    broker_lib = types.ModuleType("broker_lib")
+    for value in (
+        AccountInfo, BrokerAdapter, Order, OrderResult,
+        OrderSide, OrderType, Position,
+    ):
+        setattr(broker_lib, value.__name__, value)
+    namespace = {"__name__": f"generated_{key}_broker"}
+    with patch.dict(sys.modules, {"broker_lib": broker_lib}):
+        exec(
+            compile(BROKER_TEMPLATES[key].code, f"brokers/{key}_broker.py", "exec"),
+            namespace,
+        )
+    return namespace
+
+
+class _PionexResponse:
+    def __init__(self, payload: dict, status_code: int = 200):
+        self._payload = payload
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+
+    def json(self):
+        return self._payload
+
+
+class _PionexSession:
+    def __init__(self, response: _PionexResponse):
+        self.response = response
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return self.response
+
+    def get(self, url, **kwargs):
+        self.calls.append(("GET", url, kwargs))
+        return self.response
 
 
 class _LiveBrokerProbe:
@@ -143,6 +206,10 @@ def test_order_validation():
         assert False
     except ValueError:
         pass
+    with pytest.raises(ValueError, match="OrderSide"):
+        Order("X", "BUY", 1).validate()  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="OrderType"):
+        Order("X", OrderSide.BUY, 1, "MARKET").validate()  # type: ignore[arg-type]
     try:
         Order("X", OrderSide.BUY, 1, OrderType.LIMIT).validate()  # 限價單缺 limit_price
         assert False
@@ -213,9 +280,307 @@ def test_brokers_registered():
     expected = {
         "binance", "ibkr", "alpaca", "shioaji",          # 原有
         "yuanta", "fubon", "kgi", "tw_futures",          # 台股新增
-        "ccxt", "okx", "bybit", "tradier",               # 其他市場新增
+        "pionex", "ccxt", "okx", "bybit", "tradier",    # 其他市場新增
     }
     assert expected <= keys
+
+
+def test_pionex_scaffold_uses_official_production_api_without_fake_sandbox():
+    from core.broker import BROKER_TEMPLATES
+
+    template = BROKER_TEMPLATES["pionex"]
+    assert template.market == "crypto"
+    assert "https://api.pionex.com" in template.code
+    assert "https://www.pionex.com/docs/api-docs/zh-hant" in template.code
+    assert "testnet" not in template.code.lower()
+    assert "sandbox" in template.notes.lower()  # 必須明說官方未列 sandbox
+
+    files = generate_project(ScaffoldOptions(
+        project_name="pionex-safe",
+        broker="pionex",
+        market="crypto",
+        symbols=("BTC_USDT",),
+    ))
+    by_path = {item.relpath: item.content for item in files}
+    assert "brokers/pionex_broker.py" in by_path
+    config = by_path["config.example.yaml"]
+    assert 'api_key_env: "PIONEX_API_KEY"' in config
+    assert 'api_secret_env: "PIONEX_API_SECRET"' in config
+    assert 'quote_currency: "USDT"' in config
+    assert 'api_key: ""' not in config
+    assert 'api_secret: ""' not in config
+    assert "sandbox:" not in by_path["config.example.yaml"]
+    assert "requests>=2.31" in by_path["requirements.txt"]
+    assert 'os.environ[creds.get("api_key_env"' in by_path["broker_setup.py"]
+
+
+def test_pionex_signature_sorts_query_and_signs_exact_json_body():
+    PionexBroker = _execute_broker_template("pionex")["PionexBroker"]
+    broker = PionexBroker("public-key", "secret-key")
+    response = _PionexResponse({"result": True, "data": {"orderId": 7}})
+    session = _PionexSession(response)
+    broker.session = session
+    body = {"symbol": "BTC_USDT", "side": "SELL", "type": "MARKET", "size": "0.01"}
+
+    broker._private_request(
+        "POST",
+        "/api/v1/trade/order",
+        params={"timestamp": 1655896754515, "z": "last", "a": "first"},
+        body=body,
+    )
+
+    method, url, kwargs = session.calls[0]
+    assert method == "POST"
+    assert url == "https://api.pionex.com/api/v1/trade/order"
+    assert kwargs["params"] == [
+        ("a", "first"), ("timestamp", 1655896754515), ("z", "last"),
+    ]
+    body_text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    assert kwargs["data"] == body_text
+    signed = (
+        "POST/api/v1/trade/order?"
+        "a=first&timestamp=1655896754515&z=last" + body_text
+    )
+    expected = hmac.new(
+        b"secret-key", signed.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    assert kwargs["headers"]["PIONEX-SIGNATURE"] == expected
+    assert kwargs["headers"]["PIONEX-KEY"] == "public-key"
+    assert kwargs["allow_redirects"] is False
+
+    cancel_body = {"symbol": "BTC_USDT", "orderId": 7}
+    broker._private_request(
+        "DELETE",
+        "/api/v1/trade/order",
+        params={"timestamp": 1655896754515},
+        body=cancel_body,
+    )
+    method, _, kwargs = session.calls[1]
+    cancel_text = json.dumps(cancel_body, ensure_ascii=False, separators=(",", ":"))
+    cancel_payload = (
+        "DELETE/api/v1/trade/order?timestamp=1655896754515" + cancel_text
+    )
+    assert method == "DELETE"
+    assert kwargs["data"] == cancel_text
+    assert kwargs["headers"]["PIONEX-SIGNATURE"] == hmac.new(
+        b"secret-key", cancel_payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    template_time = broker._private_request.__globals__["time"]
+    with patch.object(template_time, "time", return_value=1655896754.515):
+        broker._private_request(
+            "GET", "/api/v1/trade/order", params={"orderId": 7},
+        )
+    method, _, kwargs = session.calls[2]
+    assert method == "GET"
+    assert kwargs["params"] == [("orderId", 7), ("timestamp", 1655896754515)]
+    assert kwargs["data"] is None
+
+
+def test_pionex_result_false_and_rate_limit_fail_closed():
+    PionexBroker = _execute_broker_template("pionex")["PionexBroker"]
+    broker = PionexBroker("key", "secret")
+
+    for timeout in (float("nan"), float("inf"), 0, -1):
+        with pytest.raises(ValueError, match="timeout"):
+            PionexBroker("key", "secret", timeout=timeout)
+
+    bad = _PionexResponse({
+        "result": False,
+        "code": "INVALID_TIMESTAMP",
+        "message": "Invalid timestamp",
+    }, status_code=401)
+    with pytest.raises(RuntimeError, match="同步系統時間"):
+        broker._decode_response(bad)
+
+    limited = _PionexResponse(
+        {"result": False, "code": "RATE_LIMIT", "message": "too fast"},
+        status_code=429,
+    )
+    with pytest.raises(RuntimeError, match="至少 60 秒"):
+        broker._decode_response(limited)
+    with pytest.raises(RuntimeError, match="冷卻中"):
+        broker._rate_gate(1, private=False)
+
+    class NonJson429:
+        status_code = 429
+        ok = False
+
+        def json(self):
+            raise ValueError("not json")
+
+    with pytest.raises(RuntimeError, match="至少 60 秒"):
+        PionexBroker("key", "secret")._decode_response(NonJson429())
+
+    redirect = _PionexResponse({"result": True, "data": {}}, status_code=302)
+    with pytest.raises(RuntimeError, match="HTTP 302"):
+        PionexBroker("key", "secret")._decode_response(redirect)
+
+    malformed = _PionexResponse({
+        "result": False, "code": None, "message": 123,
+    })
+    with pytest.raises(RuntimeError, match="UNKNOWN: 123"):
+        PionexBroker("key", "secret")._decode_response(malformed)
+
+
+def test_pionex_market_buy_and_client_order_id_are_safe():
+    PionexBroker = _execute_broker_template("pionex")["PionexBroker"]
+    broker = PionexBroker("key", "secret")
+    market_buy = Order("BTC_USDT", OrderSide.BUY, 0.001)
+
+    with pytest.raises(PermissionError):
+        broker.place_order(market_buy)
+    broker.confirm_live_trading(i_understand_the_risk=True)
+    result = broker.place_order(market_buy)
+    assert not result.ok
+    assert "amount" in result.message
+    assert "quantity" in result.message
+
+    # 中文且可重複的策略 client_tag 不可被誤用成 Pionex clientOrderId。
+    limit_order = Order(
+        "BTC_USDT", OrderSide.SELL, 0.001,
+        OrderType.LIMIT, limit_price=100000, client_tag="觸發停利",
+    )
+    first_id = broker._new_client_order_id()
+    second_id = broker._new_client_order_id()
+    assert re.fullmatch(r"[A-Za-z0-9-]{1,64}", first_id)
+    assert first_id != second_id
+    assert limit_order.client_tag == "觸發停利"
+
+    invalid_id = Order(
+        "BTC_USDT", OrderSide.SELL, 0.001,
+        OrderType.LIMIT, limit_price=100000,
+        client_tag="觸發停利", client_order_id="中文 ID",
+    )
+    result = broker.place_order(invalid_id)
+    assert not result.ok
+    assert "client_order_id" in result.message
+
+    invalid_type = Order(
+        "BTC_USDT", OrderSide.SELL, 0.001,
+        OrderType.LIMIT, limit_price=100000, client_order_id=123,
+    )
+    result = broker.place_order(invalid_type)
+    assert not result.ok
+    assert "必須是字串" in result.message
+
+    broker._symbol_info = lambda pair: {
+        "symbol": pair, "type": "SPOT", "enable": True,
+        "baseCurrency": "BTC", "quoteCurrency": "USDT",
+        "basePrecision": 8, "quotePrecision": 2,
+        "minTradeSize": "0.0001", "maxTradeSize": "100",
+        "minTradeDumping": "0.0001", "maxTradeDumping": "100",
+        "minAmount": "10",
+    }
+    ambiguous = Order(
+        "BTC_USDT", OrderSide.SELL, 0.001,
+        OrderType.LIMIT, limit_price=100000,
+        client_tag="觸發停利", client_order_id="safe-id-1",
+    )
+    for bad_data in ({}, {"orderId": None}, {"orderId": 0}, {"orderId": "abc"}):
+        broker._private_request = lambda *args, _data=bad_data, **kwargs: {
+            "result": True, "data": _data,
+        }
+        result = broker.place_order(ambiguous)
+        assert not result.ok
+        assert "結果不明" in result.message
+        assert "safe-id-1" in result.message
+
+
+def test_pionex_symbol_and_cancel_require_unambiguous_context():
+    PionexBroker = _execute_broker_template("pionex")["PionexBroker"]
+    broker = PionexBroker("key", "secret")
+    assert broker._normalise_symbol("btc/usdt") == "BTC_USDT"
+    assert broker._normalise_symbol("btc-usdt") == "BTC_USDT"
+    with pytest.raises(ValueError, match="BTCUSDT"):
+        broker._normalise_symbol("BTCUSDT")
+    with pytest.raises(RuntimeError, match="basePrecision"):
+        broker._validate_order_rules(
+            {}, quantity=Decimal("1"), price=Decimal("1"),
+            order_type="LIMIT", side="SELL", pair="BTC_USDT",
+        )
+    with pytest.raises(RuntimeError, match="basePrecision"):
+        broker._validate_order_rules(
+            {
+                "basePrecision": 8.5, "quotePrecision": 2,
+                "minTradeSize": "0.0001", "maxTradeSize": "100",
+                "minAmount": "10",
+            },
+            quantity=Decimal("1"), price=Decimal("100"),
+            order_type="LIMIT", side="SELL", pair="BTC_USDT",
+        )
+    with pytest.raises(PermissionError):
+        broker.cancel_order("123")
+
+
+def test_pionex_cancel_recovers_symbol_and_surfaces_partial_fill():
+    PionexBroker = _execute_broker_template("pionex")["PionexBroker"]
+    broker = PionexBroker("key", "secret")
+    broker.confirm_live_trading(i_understand_the_risk=True)
+    calls = []
+
+    def fake_private(method, path, *, params=None, body=None, weight=1):
+        calls.append((method, path, params, body, weight))
+        if method == "DELETE":
+            return {"result": True, "timestamp": 1}
+        if path.endswith("fillsByOrderId"):
+            return {"result": True, "data": {"fills": [
+                {"orderId": 123, "price": "100000", "size": "0.2"}
+            ]}}
+        return {"result": True, "data": {
+            "orderId": 123, "symbol": "BTC_USDT", "status": "CLOSED",
+            "filledSize": "0.2", "filledAmount": "20000",
+        }}
+
+    broker._private_request = fake_private
+    assert broker.cancel_order("123") is True
+    assert [call[0:2] for call in calls] == [
+        ("GET", "/api/v1/trade/order"),
+        ("DELETE", "/api/v1/trade/order"),
+        ("GET", "/api/v1/trade/order"),
+        ("GET", "/api/v1/trade/fillsByOrderId"),
+    ]
+    assert broker.last_cancel_details["filled_size"] == "0.2"
+    assert broker.last_cancel_details["fills"]
+    assert "不代表零成交" in broker.last_cancel_details["warning"]
+    with pytest.raises(ValueError, match="正整數"):
+        broker.cancel_order("0")
+
+
+def test_generated_crypto_sizing_and_unknown_cost_basis_are_fail_closed():
+    opts = ScaffoldOptions(
+        project_name="pionex-runtime-safety",
+        broker="pionex",
+        market="crypto",
+        symbols=["BTC_USDT"],
+    )
+    main_ns = _execute_generated_main(opts)
+    calculate = main_ns["calculate_order_quantity"]
+    assert calculate(500, 100_000, "crypto") == pytest.approx(0.005)
+    assert calculate(50, 100, "us_stock") == 0
+    assert calculate(0, 100, "crypto") == 0
+
+    broker_ns = _execute_broker_template("pionex")
+    broker = broker_ns["PionexBroker"]("key", "secret")
+    broker._balance_rows = lambda: [
+        {"coin": "BTC", "free": "0.2", "frozen": "0"},
+        {"coin": "USDT", "free": "100", "frozen": "0"},
+    ]
+    broker._spot_prices = lambda: {"BTC_USDT": Decimal("100000")}
+    position = broker.get_positions()[0]
+    assert position.cost_basis_known is False
+    with pytest.raises(ValueError, match="成本基準"):
+        _ = position.unrealized_pnl
+
+    strategy_ns = _execute_generated_strategy(opts)
+    strategy = strategy_ns["Strategy"]({"risk": {}})
+    signal = strategy.on_bar(
+        "BTC_USDT",
+        [{"close": 100.0}],  # 與真實 BTC 市價差很多，也不可觸發出售
+        position,
+    )
+    assert signal.action == "hold"
+    assert "成本基準未知" in signal.reason
 
 
 def test_all_broker_templates_valid_python():
@@ -380,6 +745,28 @@ def test_generated_live_runtime_requires_all_stage_safety_gates():
     broker = _LiveBrokerProbe()
     maybe_enable_live(broker, valid)
     assert broker.confirmed_with is True
+
+    reject_replay = namespace["reject_live_historical_replay"]
+    with pytest.raises(SystemExit, match="歷史／示範 K 線"):
+        reject_replay(_LiveBrokerProbe())
+    reject_replay(types.SimpleNamespace(is_live=False))
+
+    # 完整 run() 在 live broker 進入 connect() 前就必須退出，送單路徑不可觸發。
+    class LiveRunProbe(_LiveBrokerProbe):
+        def __init__(self):
+            super().__init__()
+            self.connect_calls = 0
+
+        def connect(self):
+            self.connect_calls += 1
+
+    live_probe = LiveRunProbe()
+    namespace["load_config"] = lambda: valid
+    namespace["build_broker"] = lambda config: live_probe
+    with pytest.raises(SystemExit, match="歷史／示範 K 線"):
+        namespace["run"]()
+    assert live_probe.confirmed_with is True
+    assert live_probe.connect_calls == 0
 
 
 def test_generated_live_runtime_yaml_parse_failure_is_fail_closed(tmp_path):

@@ -183,7 +183,35 @@ anti-gambling-trader scan-screenshot --text "手機複製出的圖片文字"
 4. 本機程式仍明確開啟 live 常數。
 
 缺少設定、設定解析失敗、階段不符或任何確認不足，都應 fail closed。工具不代填 API
-金鑰、不代解除閘門，也不替使用者送出真錢訂單。
+金鑰、不代解除閘門，也不替使用者送出真錢訂單。此外，生成的 `main.py` 是歷史／
+示範 K 線 replay；即使前述閘門全通過，偵測到 live broker 仍會退出，避免把歷史訊號
+一次送成多張真單。真實驗證必須另寫只處理最新已完成 K 線的 runner。
+
+### Pionex 派網現貨 API
+
+```bash
+anti-gambling-trader scaffold --name pionex_bot --broker pionex \
+  --market crypto --symbols "BTC_USDT" --from-analysis my_trades.csv
+```
+
+Pionex 範本依[官方 API 文件](https://www.pionex.com/docs/api-docs/zh-hant)與
+[官方現貨 OpenAPI](https://raw.githubusercontent.com/pionex-official/pionex-open-api/refs/heads/main/openapi.yaml)
+實作簽章、餘額、行情、限價單、市價賣單、查單與撤單骨架。使用時要注意：
+
+- 官方現貨規格只列 `https://api.pionex.com` 正式站，沒有列 sandbox／testnet；
+  紙上驗證必須使用本機 `PaperBroker`，不能以真實 API 小額下單冒充模擬。
+- 先建立只有讀取權限且綁定 IP 白名單的 API key；不要把 key 或 secret 提交到 git。
+- Pionex 的市價買單要求報價幣金額 `amount`，但共用 `Order.quantity` 是標的數量。
+  範本刻意拒絕市價買單，避免把 `0.001 BTC` 誤送成 `0.001 USDT` 或反過來。
+- `client_tag` 保留給策略理由（可為中文、可重複），不會拿去冒充券商委託 ID；
+  可另填唯一 `client_order_id`，省略時範本會產生。網路逾時後先用該 ID 查單，不能直接重送。
+- 現貨 balance API 不提供平均成本或真實未實現損益；範本不把它包裝成已驗證績效。
+  成本未知的既有持倉會被標記，生成策略只會 hold，不會拿示範行情自動停損／停利。
+- 撤單後會重新查詢 order 與 fills；「撤單請求被接受」不等於沒有部分成交。
+- 官方限制為 IP 共用 10 weight／秒，私有端點另受帳戶 10 weight／秒限制；收到
+  HTTP 429 後範本不自動重試，至少冷卻 60 秒。
+
+這仍是待使用者自行接線與驗證的程式腳架，不代表 Pionex、策略或帳戶已通過適合度判定。
 
 ## 10. 建議的新手驗收流程
 

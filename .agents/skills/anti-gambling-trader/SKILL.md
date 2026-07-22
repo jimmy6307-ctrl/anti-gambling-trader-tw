@@ -7,7 +7,7 @@ description: >-
   掃描群組對話的詐騙話術(scan-text)、檢驗老師宣稱的績效(guru-check)、
   鑑識假對帳單(forensics)、倖存者偏差示範(survivorship)。可模擬爆倉
   風險(risk-sim)、偵測優勢衰退(trend)、輸出可傳給家人的 HTML 報告與
-  分享圖卡,並產生 13 種券商的交易程式腳架(預設紙上模擬)。
+  分享圖卡,並產生 14 種券商選項的交易程式腳架(預設紙上模擬)。
   當使用者提到:分析我的交易、對帳單、我是不是在賭博、勝率盈虧比、
   這老師可信嗎、這是詐騙嗎、我會不會賠光爆倉、我最近是不是退步了、
   把報告傳給家人、建立我的交易程式、接券商 API 時,使用此技能。
@@ -145,12 +145,13 @@ forensics=可疑、risk-sim=爆倉路徑>10%),錯誤回 `1`,其餘 `0`。
 && python main.py`(紙上模擬)。
 
 - 產出**自包含**(內含 broker_lib.py),不依賴本體即可執行。
-- 券商 13 種(台股:永豐/元大/富邦/凱基/群益等;美股:IBKR/Alpaca/Tradier;
-  加密:Binance/OKX/Bybit/ccxt),真實券商為待填框架;台灣券商 API 多需
+- 券商 14 種選項(含 PaperBroker；台股:永豐/元大/富邦/凱基/群益等;
+  美股:IBKR/Alpaca/Tradier;加密:Binance/Pionex/OKX/Bybit/ccxt),真實券商為
+  待填框架;Pionex 官方現貨規格未列 sandbox,必須先用 PaperBroker;台灣券商 API 多需
   臨櫃簽署與數個工作天審核。
-- 三層安全:預設 PaperBroker、真實下單需雙重明確確認；設定檔只有在樣本外延續、
+- 四層安全:預設 PaperBroker、真實下單需雙重明確確認；設定檔只有在樣本外延續、
   幣別與風險基準皆可靠，且 stage=`tiny_live_validation` 時才可能開啟 live 旗標，
-  其餘情況一律禁用。
+  其餘情況一律禁用；生成的歷史/示範 replay 偵測到 live broker 會硬退出。
 
 ## 資料與環境備註
 

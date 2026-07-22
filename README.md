@@ -250,6 +250,7 @@ cd my_bot && pip install -r requirements.txt && python main.py
 | `alpaca` | Alpaca | 美股 |
 | `tradier` | Tradier（REST API） | 美股 |
 | `binance` | Binance | 加密貨幣 |
+| `pionex` | [Pionex 派網（官方現貨 REST API）](https://www.pionex.com/docs/api-docs/zh-hant) | 加密貨幣現貨 |
 | `okx` | OKX | 加密貨幣 |
 | `bybit` | Bybit | 加密貨幣 |
 | `ccxt` | ccxt（一個介面接 100+ 交易所） | 加密貨幣 |
@@ -257,10 +258,19 @@ cd my_bot && pip install -r requirements.txt && python main.py
 > 台灣券商 API 多需臨櫃簽署風險預告書、申請審核（常需數個工作天），
 > 部分需安裝憑證或元件。各範本的說明已標注關鍵前置條件，實際以券商官方文件為準。
 
+`pionex` 範本固定使用官方正式站 `https://api.pionex.com`，目前官方現貨 OpenAPI
+未列 sandbox／testnet，所以不能拿正式 API 冒充模擬環境。請先留在 `PaperBroker`，
+API key 只開讀取並設定 IP 白名單。Pionex 市價買單使用報價幣 `amount`，與通用
+`Order.quantity` 的標的數量語意不同；範本會保守拒絕市價買單。策略用的
+`client_tag` 與券商 `client_order_id` 已分離；後者可明確指定，省略時會安全產生，
+避免中文策略理由或逾時重送造成識別錯誤。既有持倉若沒有可靠成本，生成策略只會
+`hold`；撤單後也會重查訂單與成交，不能把「接受撤單」誤讀成零成交。代號請明寫成
+`BTC_USDT`。
+
 **可選開源圖表庫**：`lightweight`（TradingView，Apache-2.0）、`plotly`（MIT）、
 `mplfinance`（BSD）、`echarts`（Apache-2.0）。
 
-### 三層安全設計（保護你的錢）
+### 四層安全設計（保護你的錢）
 
 1. **預設紙上模擬**：產出專案預設用 `PaperBroker`，完整模擬撮合但不碰真錢。
 2. **完整階段連動**：不是只看樣本內裁決；只有樣本外延續、幣別與風險基準都可靠，
@@ -269,6 +279,9 @@ cd my_bot && pip install -r requirements.txt && python main.py
 3. **Runtime 多重硬閘**：生成的 `main.py` 會重新驗證上述兩欄、
    `risk.i_have_read_disclaimer is true` 與本機 `ALLOW_LIVE_TRADING=True`，全部通過後
    才呼叫券商的雙重確認。缺欄位、錯誤型別、其他 stage 或 YAML 損壞一律 fail closed。
+4. **歷史 replay 不碰真錢**：`main.py` 內建的 120 根歷史／示範 K 線只准紙上執行；
+   偵測到 live broker 會硬性退出，避免把過去訊號一次送成多張真單。真實驗證必須另寫
+   只處理最新已完成 K 線的 runner，並接上可驗證的即時資料源。
 
 > 本工具產生程式碼協助你，但**絕不替你用真錢下單、不替你填金鑰、不替你解除安全閘門**。
 > 真實金融交易必須由你自己操作並負全部責任。把未經驗證的賭博自動化，只會賠得更快。
@@ -294,13 +307,13 @@ core/
   survivorship.py      # 倖存者偏差模擬器（精確 DP，非模擬近似）
   forensics/           # 假績效統計鑑識（runs test / Lo 校正夏普 / 尾數卡方）
   antiscam/            # 反詐核心：特徵庫 + scam-check + 話術偵測 + 假老師驗證器
-  broker/              # 券商抽象層 + PaperBroker + 12 種券商範本（共 13 種券商選項）
+  broker/              # 券商抽象層 + PaperBroker + 13 種真實券商範本（共 14 種選項）
   charts/              # 四種開源圖表庫範本 + 樣式預覽
   scaffold/            # 個人交易程式專案產生器（產出自包含 broker_lib）
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code 技能包裝
 .agents/skills/anti-gambling-trader/SKILL.md   # Codex／通用 agent 技能包裝
 core/examples/         # 三市場範例資料（隨套件打包，pip 安裝後 demo 仍可用）
-tests/                 # 18 個測試檔，344 個測試
+tests/                 # 18 個測試檔，351 個測試
 ```
 
 > **我們刻意不做的事**：不用班佛定律（報酬有負數、不跨數量級，前提不成立）、
@@ -341,7 +354,7 @@ python tests/test_trade_logic_audit.py
 > 誠實聲明：上列署名為社群化名，「好棒棒反詐協會」**不是**立案法人或
 > 官方組織。本專案的可信度不來自頭銜，來自：公開的原始碼、可重現的
 > 實驗（`experiments/`，固定 seed）、[方法論全文](docs/methodology.md)與
-> 344 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
+> 351 個自動化測試。歡迎任何人檢驗與挑戰 —— 這正是本工具要求「老師們」
 > 做到的事。
 
 ## 授權
