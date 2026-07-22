@@ -3,10 +3,12 @@
 [繁體中文](README.md)
 
 **Wondering whether that investment group is a scam, whether the "guru" calling trades can be trusted, or whether your trading profits come from skill or luck?**
-This is a free, open-source statistical tool: feed it your trade history (Taiwan stocks / US stocks / crypto),
+This is a free, open-source toolkit for trading statistics, investment-fraud defense and
+automated-trading development: feed it your trade history (Taiwan stocks / US stocks / crypto),
 and it uses expectancy, significance testing and out-of-sample validation to tell you honestly — whether your profit is a **repeatable edge**
 or **luck plus survivorship bias (gambling)**. It also has built-in scam-language scanning, fake-performance forensics and fake-guru claim checking.
-All analysis runs on your own computer; nothing is uploaded to any server.
+It can also turn trading logic into backtestable strategy skeletons and generate automated-trading
+projects that can be connected to broker APIs. Trade analysis stays on your computer; nothing is uploaded.
 
 > A tool that is **honest to the point of being unlikable**. It will not tell you "you will make money" —
 > if your record is not suited to long-term investing, it will plainly talk you out of it.
@@ -14,12 +16,22 @@ All analysis runs on your own computer; nothing is uploaded to any server.
 > Is this investment group a scam? Is a 90% win rate believable? Is it normal to be asked to
 > "pay tax before withdrawal"? What to do if you have been scammed?
 
+> 🤖 **It can build automated-trading projects, not just analyze trades.** `scaffold` generates a
+> self-contained strategy, risk controls, broker interface, data feed and charting project with
+> `PaperBroker` plus 13 live-broker/exchange templates. Paper mode runs out of the box. If you build
+> real automation, you must connect the broker API and live-data runner and preserve all four safety
+> checks. The generated historical runner never submits live orders; a live adapter can submit only
+> after you provide the keys, implement a live runner and explicitly unlock it.
+
 **TL;DR** — An honest, open-source (MIT) trading-performance analyzer for
 Taiwan securities and derivatives, US stocks, crypto and forex. It uses expectancy, significance tests (t-test +
 centered bootstrap) and out-of-sample validation to tell whether your P&L is a
 repeatable edge or survivorship-biased luck — and it will actively discourage you
 if it's the latter. Includes scam-language scanning, fake-performance forensics
-and a guru-claim probability checker. Pure Python stdlib, all analysis stays local.
+and a guru-claim probability checker. The statistical core uses the Python standard library,
+and trade-record analysis stays local.
+It also generates backtestable strategies and automated-trading projects, with paper trading by
+default and explicit safety gates for any user-built live connection.
 
 ## 👶 Never used a command line? Start here
 
@@ -90,6 +102,9 @@ Supports **Taiwan stocks / US stocks / crypto**, imports trade records from **CS
 - **Beginner stage routing**: uses the full record to recommend stopping, paper trading, or at most tiny live validation
 - **HTML report + shareable card**: black-and-white numbers you can save, screenshot and send to family
 - Reverse-engineers your trading logic into a **backtestable strategy skeleton** (backtrader / vectorbt / generic)
+- **Automated-trading project scaffold**: generates a self-contained strategy, risk controls, broker
+  interface, data feed and charts; `PaperBroker` runs directly, with 13 live-broker/exchange templates
+  for users to connect and validate themselves
 - If the verdict is **not suited to long-term investing, it explicitly talks you out of it**
 
 Supported markets: Taiwan stocks, Taiwan ETFs, **TAIEX futures / options (with contract multipliers)**, US stocks, crypto, **forex**.
@@ -219,10 +234,13 @@ See the [full fail-closed matrix](docs/user-guide.md#4-資料不完整時工具�
    Both segments must have significant positive expectancy, later degradation must stay below 50%, and the rule must have been frozen before the later data was seen. Missing time, mixed timezones or incomparable currencies cause an explicit refusal instead of a guessed split.
 4. **Gambling-pattern scan**: negative expectancy, results propped up by one outsized win, small wins / large losses, extreme drawdowns, long losing streaks, pure day trading…
 
-## Build your own trading program
+## Build your own automated trading program
 
 Beyond the single-file strategy skeleton, this tool can also use an **interactive scaffold**
-to generate a complete, runnable personal trading-program project for you.
+to generate a complete, runnable personal automated-trading project. The generated project first
+runs the strategy and simulated fills through `PaperBroker`. Real automation additionally requires
+you to connect the broker API, provide a live-data runner that processes only the latest completed
+bar, and preserve the four safety checks below in that custom live runner.
 
 ```bash
 # 1. Preview four open-source chart styles side by side
@@ -240,7 +258,9 @@ python -m core.cli scaffold --name my_bot --broker binance --chart lightweight \
 cd my_bot && pip install -r requirements.txt && python main.py
 ```
 
-**Available brokers** (you connect the API yourself, filling in keys and the order implementation; run the `brokers` command for the full list):
+**Available brokers** (every generated project defaults to `PaperBroker`; live-broker/exchange
+connection completeness and prerequisites vary by template, and you must configure your own API key;
+run `brokers` for the full list):
 
 | key | Broker | Market |
 |-----|------|------|
@@ -292,8 +312,9 @@ queries because an accepted cancel does not prove zero fills. Use explicit symbo
    Tiny live validation requires a separate runner that processes only the latest completed bar from
    a verifiably live data source.
 
-> This tool generates code to help you, but it will **never place real-money orders for you, never fill in your API keys,
-> and never disarm the safety gate for you**. Real financial trading must be performed by you, at your own full responsibility.
+> The generated historical/demo runner **never submits live orders**. A live adapter can submit only
+> after you implement a live runner, provide the keys and explicitly unlock the safety gates.
+> Real financial trading must be performed by you, at your own full responsibility.
 > Automating unverified gambling only loses money faster.
 
 ## Project structure

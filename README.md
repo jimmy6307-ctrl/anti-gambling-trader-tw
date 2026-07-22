@@ -1,22 +1,33 @@
 # 反詐投資王（Anti-Gambling Trader）
 
 **你在懷疑「投資群組是不是詐騙」「老師帶單可不可信」「我的交易到底是實力還是運氣」嗎？**
-這是一個免費開源的統計工具：把交易紀錄（台股／美股／加密貨幣）丟進來，
+這是一個免費開源的交易統計、投資反詐與自動化交易開發工具：把交易紀錄
+（台股／美股／加密貨幣）丟進來，
 它用期望值、顯著性檢定與樣本外驗證，給你統計證據判斷獲利更像**可重複的優勢**，
 還是**運氣＋倖存者偏差（賭博）**；並內建詐騙話術掃描、假績效鑑識與假老師檢驗。
-資料全程在你自己的電腦上分析，不上傳任何伺服器。
+它也能把交易邏輯轉成可回測策略，並產生可接券商 API 的自動化交易程式專案。
+交易分析資料全程在你自己的電腦上處理，不上傳任何伺服器。
 
 > 一個**誠實到不討喜**的工具。它不會告訴你「你會賺錢」——
 > 不適合長期投資的，它會直接勸退你。
 > 👉 急著找答案？先看 **[常見問題 FAQ](docs/faq.md)**：投資群組是詐騙嗎、
 > 勝率 90% 可信嗎、出金要先繳稅正常嗎、被騙了怎麼辦。
 
+> 🤖 **不只分析，也能建立自動化交易程式。** `scaffold` 會產生自包含的策略、
+> 風控、券商介面、資料源與圖表專案，提供 `PaperBroker` 與 13 種真實券商／交易所範本。
+> 紙上模擬可直接執行；自行實作真實自動交易時，必須接妥券商 API、即時行情 runner，
+> 並沿用四層安全檢查。預設生成的歷史 runner 不會送出真單；只有使用者自行填入金鑰、
+> 完成 live runner 並明確解鎖後，live adapter 才可能送單。
+
 **English TL;DR** — An honest, open-source (MIT) trading-performance analyzer for
 Taiwan securities and derivatives, US stocks, crypto and forex. It uses expectancy, significance tests (t-test +
 centered bootstrap) and out-of-sample validation to tell whether your P&L is a
 repeatable edge or survivorship-biased luck — and it will actively discourage you
 if it's the latter. Includes scam-language scanning, fake-performance forensics
-and a guru-claim probability checker. Pure Python stdlib, all analysis stays local.
+and a guru-claim probability checker. The statistical core uses the Python standard library,
+and trade-record analysis stays local.
+It can also generate backtestable strategy skeletons and automated-trading projects with
+paper trading by default and explicit safety gates for any user-built live connection.
 
 ## 👶 完全沒用過電腦命令？從這裡開始
 
@@ -88,6 +99,8 @@ anti-gambling-trader scam-check
 - **新手階段分流**：用完整交易紀錄判斷目前只適合停手、紙上模擬或極小額驗證
 - **HTML 報告 + 分享圖卡**：可存檔、可截圖傳給家人的白紙黑字數據
 - 反推你的交易邏輯，產生 **可回測的策略骨架**（backtrader / vectorbt / 通用）
+- **自動化交易程式腳架**：產生自包含的策略、風控、券商介面、資料源與圖表專案；
+  `PaperBroker` 可直接執行，另有 13 種真實券商／交易所範本供使用者自行接線與驗證
 - 若判定**不適合長期投資，明確勸退**
 
 支援市場：台股、台股 ETF、**台指期 / 選擇權（含契約乘數）**、美股、加密貨幣、**外匯**。
@@ -216,9 +229,12 @@ python -m core.cli analyze --example us --json result.json --strategy my_strateg
    缺時間、混時區或幣別不可比時直接拒算，而不是用列順序猜測。
 4. **賭博特徵掃描**：負期望、單筆暴賺撐場、賺小賠大、極端回撤、長連虧、純當沖…
 
-## 建立你自己的交易程式
+## 建立你自己的自動化交易程式
 
-除了單檔策略骨架，本工具還能用**互動式腳架**，為你產生一整套可執行的個人交易程式專案。
+除了單檔策略骨架，本工具還能用**互動式腳架**，為你產生一整套可執行的個人
+自動化交易程式專案。生成專案會先以 `PaperBroker` 執行策略與模擬撮合；要進行
+真實自動交易，使用者還必須自行接妥券商 API、只處理最新已完成 K 線的即時行情
+runner，並在自訂 live runner 中沿用下方四層安全檢查。
 
 ```bash
 # 1. 先挑圖表樣式（四種開源圖表庫並排預覽）
@@ -236,7 +252,8 @@ python -m core.cli scaffold --name my_bot --broker binance --chart lightweight \
 cd my_bot && pip install -r requirements.txt && python main.py
 ```
 
-**可選券商**（你自己接入 API，填 key 與下單實作；執行 `brokers` 指令看完整清單）：
+**可選券商**（所有生成專案預設 `PaperBroker`；真實券商／交易所的連接完整度與
+前置申請依各範本說明，API key 必須由你自行設定；執行 `brokers` 看完整清單）：
 
 | key | 券商 | 市場 |
 |-----|------|------|
@@ -283,7 +300,8 @@ API key 只開讀取並設定 IP 白名單。Pionex 市價買單使用報價幣 
    偵測到 live broker 會硬性退出，避免把過去訊號一次送成多張真單。真實驗證必須另寫
    只處理最新已完成 K 線的 runner，並接上可驗證的即時資料源。
 
-> 本工具產生程式碼協助你，但**絕不替你用真錢下單、不替你填金鑰、不替你解除安全閘門**。
+> 預設生成的歷史／示範 runner **不會送出真單**；只有使用者自行完成 live runner、
+> 填入金鑰並明確解除安全閘門後，live adapter 才可能送單。
 > 真實金融交易必須由你自己操作並負全部責任。把未經驗證的賭博自動化，只會賠得更快。
 
 ## 專案結構
