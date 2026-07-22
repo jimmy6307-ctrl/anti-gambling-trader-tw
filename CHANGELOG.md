@@ -26,6 +26,12 @@
 - 樣本外驗證報告明示前提:規則若看著全段歷史調整,結論會偏樂觀
 
 ### Added
+- Pionex 派網官方現貨 REST API 腳架：固定 production allowlist、HMAC-SHA256 exact-body
+  簽章、餘額／行情／限價與市價賣單／查撤單支援、權重節流與 429 冷卻；因官方未列
+  現貨 sandbox，維持 PaperBroker 優先，並對市價買單 amount 單位採 fail-closed；
+  撤單可在重啟後先查回 symbol，並強制覆核 order / fills，避免把撤單接受誤當零成交
+- 生成 `main.py` 對任何 live broker 禁止執行歷史／示範 K 線 replay，避免把整段
+  過去訊號一次送成真單；加密貨幣部位 sizing 不再把不足 1 幣強制放大成 1 幣
 - 新手入口 `start`、五個短問題逐筆記錄 `record`、以真實紀錄分流的 `fit-check`
 - 交易截圖 OCR 覆核流程：逐欄證據、單位、衝突／低信心攔截與交易技術文字線索；
   單張截圖不會被當成績效或策略優勢證明

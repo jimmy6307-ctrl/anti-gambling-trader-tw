@@ -170,7 +170,7 @@ git log --format=full cc7bbd3          # 第 6 輪(其餘 hash 見上表)
 git show eeac688 --stat                # 看某輪實際改了哪些檔
 ```
 
-### 5.2 跑完整測試(本文撰寫時 344 個)
+### 5.2 跑完整測試(本文撰寫時 351 個)
 
 ```bash
 python -m pytest tests/ -q

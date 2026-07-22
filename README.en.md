@@ -254,6 +254,7 @@ cd my_bot && pip install -r requirements.txt && python main.py
 | `alpaca` | Alpaca | US stocks |
 | `tradier` | Tradier (REST API) | US stocks |
 | `binance` | Binance | Crypto |
+| `pionex` | [Pionex (official spot REST API)](https://www.pionex.com/docs/api-docs/zh-hant) | Crypto spot |
 | `okx` | OKX | Crypto |
 | `bybit` | Bybit | Crypto |
 | `ccxt` | ccxt (one interface for 100+ exchanges) | Crypto |
@@ -262,10 +263,22 @@ cd my_bot && pip install -r requirements.txt && python main.py
 > (often several business days); some require installing certificates or components. Each template's notes flag the key
 > prerequisites, but the broker's official documentation is authoritative.
 
+The `pionex` template pins the official production host `https://api.pionex.com`.
+The current official spot OpenAPI does not list a sandbox or testnet, so production must not be
+treated as a simulation environment. Stay on `PaperBroker` first; begin with a read-only key and
+an IP allowlist. Pionex market buys use quote-currency `amount`, which is not the same as the
+base-asset meaning of the shared `Order.quantity`; the template therefore rejects market buys.
+Strategy `client_tag` values are kept separate from broker `client_order_id` values; the latter
+may be supplied explicitly and are safely generated when omitted. This avoids treating localized
+strategy reasons as order IDs and supports lookup-first recovery after a timeout. Existing holdings
+without a reliable cost basis are forced to `hold`, and cancellation is followed by order/fill
+queries because an accepted cancel does not prove zero fills. Use explicit symbols such as
+`BTC_USDT`.
+
 **Available open-source chart libraries**: `lightweight` (TradingView, Apache-2.0), `plotly` (MIT),
 `mplfinance` (BSD), `echarts` (Apache-2.0).
 
-### Three-layer safety design (protecting your money)
+### Four-layer safety design (protecting your money)
 
 1. **Paper trading by default**: generated projects default to `PaperBroker`, which fully simulates matching without touching real money.
 2. **Full-stage linkage**: the scaffold does not rely on the in-sample verdict alone. Only reliable
@@ -274,6 +287,10 @@ cd my_bot && pip install -r requirements.txt && python main.py
 3. **Runtime multi-gate enforcement**: generated `main.py` rechecks those two fields,
    `risk.i_have_read_disclaimer is true`, and the local `ALLOW_LIVE_TRADING=True` switch before it
    calls the broker's confirmation gate. Missing fields, wrong types, any other stage or broken YAML fail closed.
+4. **Historical replay never touches live money**: the 120-bar historical/demo loop in `main.py`
+   exits when it detects a live broker, preventing old signals from becoming a burst of real orders.
+   Tiny live validation requires a separate runner that processes only the latest completed bar from
+   a verifiably live data source.
 
 > This tool generates code to help you, but it will **never place real-money orders for you, never fill in your API keys,
 > and never disarm the safety gate for you**. Real financial trading must be performed by you, at your own full responsibility.
@@ -300,13 +317,13 @@ core/
   survivorship.py      # exact dynamic-programming survivorship calculation
   forensics/           # suspicious-performance diagnostics
   antiscam/            # scam patterns, checklist, text scanner and guru-claim checks
-  broker/              # broker abstraction, PaperBroker and 12 live-broker templates
+  broker/              # broker abstraction, PaperBroker and 13 live-broker templates (14 options)
   charts/              # four open-source chart templates and preview
   scaffold/            # self-contained personal trading-project generator
 .claude/skills/anti-gambling-trader/SKILL.md   # Claude Code skill wrapper
 .agents/skills/anti-gambling-trader/SKILL.md   # Codex/general agent skill wrapper
 core/examples/         # bundled examples for three markets
-tests/                 # 18 test files, 344 tests
+tests/                 # 18 test files, 351 tests
 ```
 
 > **Things we deliberately do not do**: no Benford's-law test (returns include negatives and do not span
@@ -349,7 +366,7 @@ python tests/test_trade_logic_audit.py
 > Honesty statement: the byline above is a community pseudonym, and the "好棒棒反詐協會" is **not** a registered
 > legal entity or official organization. This project's credibility does not come from titles; it comes from:
 > public source code, reproducible experiments (`experiments/`, fixed seeds), the
-> [full methodology](docs/methodology.md), and 344 automated tests.
+> [full methodology](docs/methodology.md), and 351 automated tests.
 > Anyone is welcome to examine and challenge it — which is exactly what this tool asks the "gurus" to do.
 
 ## License
