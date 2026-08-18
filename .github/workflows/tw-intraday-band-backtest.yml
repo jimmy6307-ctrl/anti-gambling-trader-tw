@@ -59,3 +59,5 @@ jobs:
           path: research_output/
           if-no-files-found: warn
           retention-days: 7
+
+# automation research trigger 2026-08-19
