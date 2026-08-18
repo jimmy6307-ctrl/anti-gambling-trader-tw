@@ -1,4 +1,4 @@
-name: Taiwan Intraday Band Backtest
+name: Taiwan Intraday Research
 
 on:
   push:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip pandas numpy requests matplotlib tabulate
 
-      - name: Run one-year 5m backtest
+      - name: Run original one-year band backtest
         run: |
           python research/tw_intraday_band_backtest.py \
             --start 2025-04-01 \
@@ -38,19 +38,24 @@ jobs:
             --min-breadth 2 \
             --out-dir research_output/tw_intraday_bands
 
-      - name: Print report
+      - name: Run frozen breakout IS/OOS research
+        run: python research/tw_breakout_oos_research.py
+
+      - name: Print reports
         if: always()
         run: |
-          echo '===== report.md ====='
+          echo '===== original band report ====='
           cat research_output/tw_intraday_bands/report.md || true
-          echo '===== summary.csv ====='
-          cat research_output/tw_intraday_bands/summary.csv || true
+          echo '===== breakout OOS report ====='
+          cat research_output/tw_breakout_oos/report.md || true
+          echo '===== breakout summary ====='
+          cat research_output/tw_breakout_oos/summary.csv || true
 
       - name: Upload result artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tw-intraday-band-backtest-results
-          path: research_output/tw_intraday_bands/
+          name: tw-intraday-research-results
+          path: research_output/
           if-no-files-found: warn
           retention-days: 7
