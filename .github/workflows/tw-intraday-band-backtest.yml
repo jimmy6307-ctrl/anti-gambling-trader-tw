@@ -44,6 +44,9 @@ jobs:
       - name: Run breakout market-regime research
         run: python research/tw_breakout_regime_research.py
 
+      - name: Run compression breakout research
+        run: python research/tw_compression_breakout_research.py
+
       - name: Print reports
         if: always()
         run: |
@@ -53,6 +56,8 @@ jobs:
           cat research_output/tw_breakout_oos/report.md || true
           echo '===== breakout regime report ====='
           cat research_output/tw_breakout_regime/report.md || true
+          echo '===== compression breakout report ====='
+          cat research_output/tw_compression_breakout/report.md || true
 
       - name: Upload result artifact
         if: always()
