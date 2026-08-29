@@ -18,6 +18,12 @@ Using the same 25-stock cached 5-minute universe, screened simple interpretable 
 
 Notable rejected example: market-breadth-filtered 20-day breakout with >=70% of the universe above MA60 and 5-day hold passed IS superficially (46 trades, avg about +1.01%, PF about 1.81) but failed OOS (24 trades, avg about -0.71%, PF about 0.71). This is a useful falsification: simply adding a strong-market filter does not solve regime dependence.
 
+## 2026-08-29
+
+Tested a distinct post-breakout continuation hypothesis to avoid re-tuning the same-day breakout rule: prior session must itself close at a fresh 20-day high while in `close > MA20 > MA60`; next session at 09:35 must still hold above the prior breakout level, 09:35 RVOL >= 0.8, and the 09:35 price must be between -1% and +2% versus the prior close. Entry at 09:35, fixed 5-day hold, 0.685% round-trip cost.
+
+Result on the same 25-stock universe: IS 102 trades, win rate 43.1%, average net -0.71%, median -0.685%, PF 0.68. OOS was much stronger (116 trades, win rate 51.7%, average net +1.69%, median +0.24%, PF 2.01), but because the frozen IS result failed badly, the OOS result is treated only as further evidence of regime dependence and is not a valid strategy. Rejected.
+
 ### Current conclusion
 
-No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter.
+No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern now appears across same-day breakouts and next-day continuation, so the next useful direction should explicitly model regime adaptation without choosing thresholds from OOS.
