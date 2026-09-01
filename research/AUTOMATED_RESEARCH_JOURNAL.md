@@ -24,6 +24,12 @@ Tested a distinct post-breakout continuation hypothesis to avoid re-tuning the s
 
 Result on the same 25-stock universe: IS 102 trades, win rate 43.1%, average net -0.71%, median -0.685%, PF 0.68. OOS was much stronger (116 trades, win rate 51.7%, average net +1.69%, median +0.24%, PF 2.01), but because the frozen IS result failed badly, the OOS result is treated only as further evidence of regime dependence and is not a valid strategy. Rejected.
 
+## 2026-09-01
+
+Tested a distinct uptrend pullback-and-09:35-reclaim family using the same cached universe, fixed 5-day hold and 0.685% round-trip cost. Three predeclared variants covered: (A) above MA60 with a 5-day -3%~-8% pullback and 09:35 reclaim of prior close; (B) `prev_close > MA20 > MA60` with a 5-day -2%~-6% pullback and a limited early reclaim; (C) above MA60, 5%~12% below the prior 20-day high, then +0.3%~+2% versus prior close by 09:35.
+
+All three failed IS before OOS could be used for selection: A 107 trades, avg -0.31%, PF 0.86; B 42 trades, avg -0.41%, PF 0.84; C 219 trades, avg -0.82%, PF 0.72. For diagnostic purposes only, OOS again improved materially (A avg +1.43%, PF 1.69; B +0.66%, PF 1.29; C +0.44%, PF 1.19), reinforcing the already-observed regime dependence rather than validating the family. Rejected.
+
 ### Current conclusion
 
-No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern now appears across same-day breakouts and next-day continuation, so the next useful direction should explicitly model regime adaptation without choosing thresholds from OOS.
+No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern now appears across same-day breakouts, next-day continuation, and pullback/reclaim entries, so the next useful direction should explicitly model regime adaptation using only information available before each trade.
