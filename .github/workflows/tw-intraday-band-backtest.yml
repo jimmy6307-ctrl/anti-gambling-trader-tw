@@ -1,0 +1,50 @@
+name: Taiwan Intraday Research
+
+on:
+  push:
+    branches:
+      - backtest-intraday-bands-20260819
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pandas numpy requests matplotlib tabulate
+      - name: Run original one-year band backtest
+        run: |
+          python research/tw_intraday_band_backtest.py --start 2025-04-01 --end 2026-04-01 --rvol 1.5 --top-sectors 3 --min-breadth 2 --out-dir research_output/tw_intraday_bands
+      - name: Run frozen breakout IS/OOS research
+        run: python research/tw_breakout_oos_research.py
+      - name: Run breakout market-regime research
+        run: python research/tw_breakout_regime_research.py
+      - name: Run compression breakout research
+        run: python research/tw_compression_breakout_research.py
+      - name: Run intraday-confirmed breakout research
+        run: python research/tw_breakout_intraday_confirmation.py
+      - name: Print reports
+        if: always()
+        run: |
+          for f in research_output/*/report.md; do echo "===== $f ====="; cat "$f" || true; done
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tw-intraday-research-results
+          path: research_output/
+          if-no-files-found: warn
+          retention-days: 7
