@@ -36,6 +36,8 @@ jobs:
         run: python research/tw_compression_breakout_research.py
       - name: Run intraday-confirmed breakout research
         run: python research/tw_breakout_intraday_confirmation.py
+      - name: Run frozen trend-pullback recovery research
+        run: python research/tw_trend_pullback_recovery.py
       - name: Print reports
         if: always()
         run: |
