@@ -38,6 +38,14 @@ Result: IS 71 trades, win rate 49.3%, average net +0.13%, median -0.03%, PF 1.06
 
 This falsifies the specific idea that a simple 10-session persistent breadth gate can stabilize 20-day breakouts across both regimes. Do not tune the 60% or 10-session thresholds on the same OOS window.
 
+## 2026-09-22
+
+Screened a genuinely different long-term-trend/deep-pullback recovery mechanism on the cached universe: prior close above MA120, prior five-session return between -5% and -12%, then by 09:35 price recovers to between prior close and +2%; cost remains 0.685%. The unconstrained 10-day hold initially looked promising (IS 43 trades, avg +1.68%, PF 1.60; OOS 88 trades, avg +2.02%, PF 1.56; OOS after removing top stock 3665 still avg +1.30%, PF 1.33).
+
+However, those raw signals can overlap heavily in the same stock while a prior position would still be open. After applying a conservative no-overlap/cooldown check, the 10-day version fell to 28 IS trades, avg +0.98%, PF 1.28; removing the largest IS contributor 2615 turned it negative (26 trades, avg -0.26%, PF 0.93). The 20-day version also failed the no-overlap IS check outright (25 trades, avg -0.27%, PF 0.93), despite strong OOS. IS monthly concentration was weak: only 4 of 8 active months positive for the 10-day version. Rejected under the concentration-robustness rule.
+
+Also screened simple cross-sectional 20/60-day relative-strength leader variants with trend filters. They again showed the familiar pattern: clearly negative IS and much stronger OOS at longer holds, so they are rejected as regime-sensitive rather than treated as evidence.
+
 ### Current conclusion
 
-No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern across same-day breakouts, next-day continuation, pullback/reclaim entries, and now the failure of a persistent-breadth gate suggests the next useful step is genuinely broader/earlier data or a different mechanism, not further threshold tuning on this two-year sample.
+No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern across breakouts, continuation, pullback/reclaim, relative-strength, and persistent-breadth filters suggests the next useful step is broader/earlier data or a mechanism explicitly designed for both trend and non-trend regimes—not further threshold tuning on the same two-year sample.
