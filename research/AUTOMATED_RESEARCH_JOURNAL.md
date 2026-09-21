@@ -30,6 +30,14 @@ Tested a distinct uptrend pullback-and-09:35-reclaim family using the same cache
 
 All three failed IS before OOS could be used for selection: A 107 trades, avg -0.31%, PF 0.86; B 42 trades, avg -0.41%, PF 0.84; C 219 trades, avg -0.82%, PF 0.72. For diagnostic purposes only, OOS again improved materially (A avg +1.43%, PF 1.69; B +0.66%, PF 1.29; C +0.44%, PF 1.19), reinforcing the already-observed regime dependence rather than validating the family. Rejected.
 
+## 2026-09-21
+
+Tested one predeclared regime-adaptation hypothesis rather than tuning the prior OOS winners: permit a 09:35 20-day breakout only when the stock is already in `prev_close > MA20 > MA60`, RVOL >= 1.5, and at least 60% of the 25-stock universe had been above its MA60 on every one of the prior 10 sessions. Fixed 5-day hold; 0.685% round-trip cost. The market-persistence filter uses only information available before entry.
+
+Result: IS 71 trades, win rate 49.3%, average net +0.13%, median -0.03%, PF 1.06. Removing the largest contributing stock (2881) turned IS negative: 63 trades, average -0.39%, PF 0.84. OOS also failed outright: 24 trades, average -0.23%, median +0.37%, PF 0.89; removing top contributor 3017 worsened average to -0.74%, PF 0.69. Monthly OOS results were concentrated in June (20/24 trades) with November materially negative. Rejected.
+
+This falsifies the specific idea that a simple 10-session persistent breadth gate can stabilize 20-day breakouts across both regimes. Do not tune the 60% or 10-session thresholds on the same OOS window.
+
 ### Current conclusion
 
-No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern now appears across same-day breakouts, next-day continuation, and pullback/reclaim entries, so the next useful direction should explicitly model regime adaptation using only information available before each trade.
+No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern across same-day breakouts, next-day continuation, pullback/reclaim entries, and now the failure of a persistent-breadth gate suggests the next useful step is genuinely broader/earlier data or a different mechanism, not further threshold tuning on this two-year sample.
