@@ -62,4 +62,8 @@ def main():
     if ispass: lines += [f'OOS：{om}',f'移除最大貢獻股票 {top}：{dm}',f'OOS正報酬月份占比={mshare:.1%}',f'CONFIRMED={confirmed}']
     else: lines += ['未通過 IS；不使用 OOS 結果做策略宣稱。','CONFIRMED=False']
     report='\n'.join(lines); (OUT/'report.md').write_text(report,encoding='utf-8'); print(report)
-if __name__=='__main__': main()
+if __name__=='__main__':
+    main()
+    # Additional independent diagnostic; keeps the workflow YAML unchanged.
+    import tw_breakout_alpha_diagnostic
+    tw_breakout_alpha_diagnostic.main()
