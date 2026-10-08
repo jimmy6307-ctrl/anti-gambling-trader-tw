@@ -119,8 +119,8 @@ def main() -> None:
                     off = official_month(session, sid, month)
                     if off.empty:
                         raise ValueError("No parsable TWSE records")
-                    # Fixed first four common trading days of each month.
-                    m = daily.merge(off, on="date", how="inner").sort_values("date").head(4)
+                    # Audit all common stock-days in predeclared months (quality check, not strategy).
+                    m = daily.merge(off, on="date", how="inner").sort_values("date")
                     for _, row in m.iterrows():
                         v = float(row["twse_volume"])
                         close = float(row["twse_close"])
@@ -161,6 +161,7 @@ def main() -> None:
         cls = comp["close_relative_error"].abs().dropna()
         lines += [
             f"Matched stock-days: {len(comp)}.",
+            f"Archive close != official close: {int((comp['archive_close'] != comp['twse_close']).sum())}/{len(comp)}.",
             f"Median absolute daily volume relative error: {vol.median():.2%}.",
             f"95th percentile absolute daily close relative error: {cls.quantile(.95):.2%}.",
             f"Stock-days with >10% volume discrepancy: {int((vol > .10).sum())}/{len(vol)}.",
