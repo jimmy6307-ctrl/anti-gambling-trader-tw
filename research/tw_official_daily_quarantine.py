@@ -79,7 +79,7 @@ def parse_month(payload: dict, sid: str, month: str, at: str) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="research_output/tw_official_daily_2026")
+    ap.add_argument("--out", default="research_output/tw_source_quality/official_daily_2026")
     args = ap.parse_args()
     out = Path(args.out)
     raw_dir = out / "raw"
