@@ -183,3 +183,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Data-only follow-on: capture previously unavailable 2026 official daily
+    # anchors in the existing quality-audit artifact. Never calculate P&L here.
+    from tw_official_daily_quarantine import main as collect_official_daily
+    raise SystemExit(collect_official_daily())
