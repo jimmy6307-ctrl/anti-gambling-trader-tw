@@ -187,4 +187,11 @@ if __name__ == "__main__":
     # Data-only follow-on: capture previously unavailable 2026 official daily
     # anchors in the existing quality-audit artifact. Never calculate P&L here.
     from tw_official_daily_quarantine import main as collect_official_daily
-    raise SystemExit(collect_official_daily())
+    official_status = collect_official_daily()
+    # Separate marketwide official DAILY QA; output stays inside the existing
+    # quality-evidence artifact. Any parser/date mismatch blocks certification.
+    from tw_marketwide_daily_gate import main as collect_marketwide_daily
+    marketwide_status = collect_marketwide_daily([
+        "--out", "research_output/tw_source_quality/marketwide_daily"
+    ])
+    raise SystemExit(0 if official_status == 0 and marketwide_status == 0 else 2)
