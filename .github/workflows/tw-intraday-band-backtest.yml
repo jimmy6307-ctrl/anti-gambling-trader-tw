@@ -32,11 +32,23 @@ jobs:
         run: python research/tw_2330_anchor_gate.py
       - name: Predeclared multi-stock daily source crosscheck
         run: python research/tw_source_quality_crosscheck.py
+      - name: Offline TPEx parser contract tests (not live validation)
+        run: python -m unittest discover -s research -p 'test_tw_tpex_historical_daily_gate_v2.py' -v
+      - name: Official TWSE marketwide historical daily check (quarantined)
+        id: twse_marketwide
+        continue-on-error: true
+        run: python research/tw_marketwide_daily_gate.py --out research_output/tw_marketwide_daily_gate
+      - name: Official TPEx historical daily check (quarantined)
+        id: tpex_daily
+        continue-on-error: true
+        run: python research/tw_tpex_historical_daily_gate_v2.py --out research_output/tw_tpex_historical_daily_gate
       - name: Publish audit status
         if: always()
         run: |
           cat research_output/tw_2330_anchor/report.md >> "$GITHUB_STEP_SUMMARY" || true
           cat research_output/tw_source_quality/report.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat research_output/tw_marketwide_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat research_output/tw_tpex_historical_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload quality evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -45,6 +57,8 @@ jobs:
           path: |
             research_output/tw_2330_anchor/
             research_output/tw_source_quality/
+            research_output/tw_marketwide_daily_gate/
+            research_output/tw_tpex_historical_daily_gate/
           if-no-files-found: warn
           retention-days: 30
 
