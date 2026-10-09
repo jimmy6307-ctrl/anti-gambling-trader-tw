@@ -110,7 +110,11 @@ def indicative_next_bar(audit, signal_bar_time, *, bar_start_proven,
     if signal.hour * 60 + signal.minute >= 805:
         raise ValueError("signal not from continuous session")
     observed_at = signal + timedelta(minutes=1)
-    candidates = [b for b in bars if observed_at <= b["timestamp"] and
+    # A bar opening exactly when the signal becomes observable has an open
+    # print that may precede order computation, transmission and queueing.
+    # Even for an indicative simulation, never treat that same-minute open
+    # as an executable post-signal price. Require a strictly later bar.
+    candidates = [b for b in bars if observed_at < b["timestamp"] and
                   b["timestamp"].hour * 60 + b["timestamp"].minute < 805 and
                   b["volume_lots"] > 0]
     if not candidates:
@@ -118,7 +122,11 @@ def indicative_next_bar(audit, signal_bar_time, *, bar_start_proven,
     b = candidates[0]
     if b["open"] >= _number(upper_limit):
         raise ValueError("at upper limit; buy execution unproven")
+    if not (0 <= slippage_rate < 1 and 0 <= buy_fee_rate < 1):
+        raise ValueError("invalid cost assumptions")
     indicative_price = b["open"] * (1 + slippage_rate)
+    if indicative_price >= _number(upper_limit):
+        raise ValueError("indicative buy reaches upper limit; execution unproven")
     cash_reserved = shares * indicative_price * (1 + buy_fee_rate)
     if cash_reserved > available_cash:
         raise ValueError("not enough cash to reserve buy and fees")
