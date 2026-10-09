@@ -44,10 +44,6 @@ jobs:
         run: python research/tw_tpex_historical_daily_gate_v2.py --out research_output/tw_tpex_historical_daily_gate
       - name: Offline TPEx monthly anchor parser tests (not live validation)
         run: python -m unittest discover -s research -p 'test_tw_tpex_individual_anchor_gate.py' -v
-      - name: Five official TPEx daily-vs-monthly anchors (quarantined)
-        id: tpex_individual_anchors
-        continue-on-error: true
-        run: python research/tw_tpex_individual_anchor_gate.py --out research_output/tw_tpex_individual_anchor_gate
       - name: Publish audit status
         if: always()
         run: |
@@ -55,7 +51,6 @@ jobs:
           cat research_output/tw_source_quality/report.md >> "$GITHUB_STEP_SUMMARY" || true
           cat research_output/tw_marketwide_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
           cat research_output/tw_tpex_historical_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
-          cat research_output/tw_tpex_individual_anchor_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload quality evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,7 +61,6 @@ jobs:
             research_output/tw_source_quality/
             research_output/tw_marketwide_daily_gate/
             research_output/tw_tpex_historical_daily_gate/
-            research_output/tw_tpex_individual_anchor_gate/
           if-no-files-found: warn
           retention-days: 30
 

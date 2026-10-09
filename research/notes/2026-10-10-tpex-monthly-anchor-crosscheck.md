@@ -21,3 +21,13 @@ No old strategy was rerun. No previously viewed period was treated as a clean ho
 Independent 1/5-minute or tick data (including 13:30 auction and bar timestamp semantics), as-of corporate actions, historical security types and exchange membership, next-tradable-bar fills, costs/volume/overlap, and genuinely untouched OOS. Do not calculate or advertise strategy edge until these pass.
 
 **NO CONFIRMED EDGE. Do not notify user.**
+
+## Live check outcome (2026-10-10, correction to prepared-probe status)
+
+- GitHub Actions run **37966526624** executed the new probe. Its synthetic unit tests passed; **all five live per-stock calls failed**.
+- Downloaded artifact **11633188139** and inspected actual raw bytes, not merely job status. Every response was a **TPEx-branded HTML `404` page** beginning `<!DOCTYPE html><html ...><title>404 - 證券櫃檯買賣中心</title>`, even though the HTTP request did not raise an HTTP error. The parser correctly rejected non-JSON; 0/5 anchors passed.
+- Therefore historical `st43_result.php` documented in old tutorials is **not a verified live endpoint in October 2026**. This is an API migration/source-discovery failure, NOT evidence of a mismatch in official stock prices. Do not relabel 0/5 as passed or use third-party reprints as independent official anchors.
+- Disabled repeated live calls to this known-dead endpoint in the CI workflow; kept parser contract tests and source file for reproducibility. Next work: identify a **current** official individual-stock historical report/API, verify response date and schema with one test before scheduling five anchors, or seek independent licensed data. The TPEx marketwide historical daily source remains independently verified for four dates.
+- GitHub Actions overall job showed success because this exploratory step was `continue-on-error`; always read the data-gate **manifest**, not the workflow badge, to determine data quality.
+
+**DATA GATE STILL BLOCKED; NO CONFIRMED EDGE. Do not notify user.**
