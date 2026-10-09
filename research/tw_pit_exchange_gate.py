@@ -27,7 +27,7 @@ class Membership:
     end: date  # exclusive; never infer membership outside this bound
     security_type: str
     source_url: str
-    evidence_published: date
+    evidence_published: date  # retrospective source date; NEVER a trading signal
 
     def __post_init__(self):
         if not re.fullmatch(r"[1-9][0-9]{3}", self.stock_id):
@@ -38,8 +38,9 @@ class Membership:
             raise ValueError("membership interval must be nonempty [start,end)")
         if not self.source_url.startswith("https://"):
             raise ValueError("verified source URL required")
-        if self.evidence_published > self.end:
-            raise ValueError("evidence published after entire interval; investigate")
+        # Retrospective source publication may be after the interval. This is
+        # valid for reconstructing historical membership, but never usable as
+        # contemporaneous information in a signal or entry rule.
 
 
 def validate_intervals(memberships: list[Membership]) -> None:
