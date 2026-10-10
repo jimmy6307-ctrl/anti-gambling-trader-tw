@@ -32,6 +32,8 @@ jobs:
         run: python research/tw_2330_anchor_gate.py
       - name: Predeclared multi-stock daily source crosscheck
         run: python research/tw_source_quality_crosscheck.py
+      - name: Offline minute auction execution gate contract tests (must pass)
+        run: python -m unittest discover -s research -p 'test_tw_auction_execution_gate.py' -v
       - name: Offline TPEx parser contract tests (not live validation)
         run: python -m unittest discover -s research -p 'test_tw_tpex_historical_daily_gate_v2.py' -v
       - name: Official TWSE marketwide historical daily check (quarantined)
