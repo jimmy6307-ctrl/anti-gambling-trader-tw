@@ -8,6 +8,7 @@ def sample():
             "data":[
                 {"date":"2026-04-23T09:35:00+08:00","open":2080,"high":2082,"low":2079,"close":2081,"volume":80},
                 {"date":"2026-04-23T09:36:00+08:00","open":2081,"high":2083,"low":2080,"close":2082,"volume":20},
+                {"date":"2026-04-23T09:37:00+08:00","open":2082,"high":2084,"low":2081,"close":2083,"volume":30},
                 {"date":"2026-04-23T13:24:00+08:00","open":2090,"high":2090,"low":2085,"close":2090,"volume":104},
                 {"date":"2026-04-23T13:30:00+08:00","open":2080,"high":2080,"low":2080,"close":2080,"volume":5330},
             ]}
@@ -72,9 +73,18 @@ class TestGate(unittest.TestCase):
         r=indicative_next_bar(self.gate(),"2026-04-23T09:35:00+08:00",
                              bar_start_proven=True,shares=1000,available_cash=3000000,
                              open_positions=0,max_positions=2,upper_limit=2200)
-        self.assertEqual(r["next_available_bar"],"2026-04-23T09:36:00+08:00")
+        self.assertEqual(r["signal_observed_at"],"2026-04-23T09:36:00+08:00")
+        self.assertEqual(r["next_available_bar"],"2026-04-23T09:37:00+08:00")
+        self.assertNotEqual(r["next_available_bar"],r["signal_observed_at"])
         self.assertEqual(r["status"],"INDICATIVE_ONLY_NOT_A_PROVEN_FILL")
         self.assertTrue(r["ex_post_participation_is_not_fill_proof"])
+
+    def test_zero_volume_signal_bar_rejected(self):
+        p=sample();p["data"][0]["volume"]=0
+        with self.assertRaisesRegex(ValueError,"signal bar.*volume"):
+            indicative_next_bar(self.gate(p),"2026-04-23T09:35:00+08:00",
+                                bar_start_proven=True,shares=1000,available_cash=3000000,
+                                open_positions=0,max_positions=2,upper_limit=2200)
 
     def test_no_cash(self):
         with self.assertRaisesRegex(ValueError,"cash"):
