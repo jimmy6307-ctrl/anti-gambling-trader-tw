@@ -105,8 +105,11 @@ def indicative_next_bar(audit, signal_bar_time, *, bar_start_proven,
     if signal.tzinfo is None or signal.utcoffset() != TPE_OFFSET:
         raise ValueError("signal timezone unknown")
     bars = audit["bars"]
-    if signal not in {b["timestamp"] for b in bars}:
+    signal_rows = [b for b in bars if b["timestamp"] == signal]
+    if not signal_rows:
         raise ValueError("signal bar absent")
+    if signal_rows[0]["volume_lots"] <= 0:
+        raise ValueError("signal bar has zero volume")
     if signal.hour * 60 + signal.minute >= 805:
         raise ValueError("signal not from continuous session")
     observed_at = signal + timedelta(minutes=1)
