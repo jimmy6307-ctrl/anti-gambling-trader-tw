@@ -1,0 +1,94 @@
+name: Taiwan Intraday Research
+
+on:
+  push:
+    branches:
+      - backtest-intraday-bands-20260819
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_legacy_backtests:
+        description: 'Explicitly rerun old contaminated backtests (not validation)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality_audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install audit dependencies
+        run: python -m pip install pandas requests tabulate
+      - name: Official 2330 close anchor (fail-closed report)
+        run: python research/tw_2330_anchor_gate.py
+      - name: Predeclared multi-stock daily source crosscheck
+        run: python research/tw_source_quality_crosscheck.py
+      - name: Offline minute auction execution gate contract tests (must pass)
+        run: python -m unittest discover -s research -p 'test_tw_auction_execution_gate.py' -v
+      - name: Offline TPEx parser contract tests (not live validation)
+        run: python -m unittest discover -s research -p 'test_tw_tpex_historical_daily_gate_v2.py' -v
+      - name: Official TWSE marketwide historical daily check (quarantined)
+        id: twse_marketwide
+        continue-on-error: true
+        run: python research/tw_marketwide_daily_gate.py --out research_output/tw_marketwide_daily_gate
+      - name: Official TPEx historical daily check (quarantined)
+        id: tpex_daily
+        continue-on-error: true
+        run: python research/tw_tpex_historical_daily_gate_v2.py --out research_output/tw_tpex_historical_daily_gate
+      - name: Offline TPEx monthly anchor parser tests (not live validation)
+        run: python -m unittest discover -s research -p 'test_tw_tpex_individual_anchor_gate.py' -v
+      - name: Publish audit status
+        if: always()
+        run: |
+          cat research_output/tw_2330_anchor/report.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat research_output/tw_source_quality/report.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat research_output/tw_marketwide_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
+          cat research_output/tw_tpex_historical_daily_gate/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload quality evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tw-data-quality-evidence
+          path: |
+            research_output/tw_2330_anchor/
+            research_output/tw_source_quality/
+            research_output/tw_marketwide_daily_gate/
+            research_output/tw_tpex_historical_daily_gate/
+          if-no-files-found: warn
+          retention-days: 30
+
+  legacy_exploration:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_legacy_backtests == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install pandas numpy requests matplotlib tabulate
+      - name: Explicit historical exploration only (contaminated OOS)
+        run: |
+          python research/tw_intraday_band_backtest.py --start 2025-04-01 --end 2026-04-01 --rvol 1.5 --top-sectors 3 --min-breadth 2 --out-dir research_output/tw_intraday_bands
+          python research/tw_breakout_oos_research.py
+          python research/tw_breakout_regime_research.py
+          python research/tw_compression_breakout_research.py
+          python research/tw_breakout_intraday_confirmation.py
+          python research/tw_trend_pullback_recovery.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tw-legacy-contaminated-exploration
+          path: research_output/
+          if-no-files-found: warn
+          retention-days: 7
