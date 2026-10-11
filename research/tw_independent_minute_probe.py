@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -44,13 +44,24 @@ def official_close(payload, target):
 def inspect_fugle(payload, stock, target):
     if payload.get("symbol") != stock or str(payload.get("timeframe")) != "1":
         raise ValueError("wrong vendor symbol/timeframe")
+    if payload.get("exchange") not in ("TWSE", "TPEx"):
+        raise ValueError("vendor exchange absent or unsupported")
+    if payload.get("type") not in (None, "EQUITY"):
+        raise ValueError("non-equity vendor security type")
+    if payload.get("adjusted") is True:
+        raise ValueError("adjusted minute data cannot be used")
     if not isinstance(payload.get("data"), list) or not payload["data"]:
         raise ValueError("empty vendor data")
     bars = []
     for row in payload["data"]:
         dt = datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            raise ValueError("vendor timestamp lacks timezone")
+        if dt.tzinfo is None or dt.utcoffset() != timedelta(hours=8):
+            raise ValueError("vendor minute timestamp requires explicit +08:00")
+        if dt.second or dt.microsecond:
+            raise ValueError("vendor minute timestamp must align to minute")
+        minute = dt.hour * 60 + dt.minute
+        if not 540 <= minute <= 810 or 805 <= minute < 810:
+            raise ValueError("vendor minute outside continuous/auction session")
         dt = dt.astimezone(TAIPEI)
         if dt.date().isoformat() != target:
             raise ValueError("vendor bar outside requested day")
@@ -65,6 +76,12 @@ def inspect_fugle(payload, stock, target):
     bars.sort(key=lambda b: b[0])
     by_clock = {b[0].strftime("%H:%M"): b for b in bars}
     closing = by_clock.get("13:30")
+    if closing is None or closing[5] <= 0:
+        raise ValueError("missing or zero-volume 13:30 closing auction")
+    if not (closing[1] == closing[2] == closing[3] == closing[4]):
+        raise ValueError("13:30 auction is not a single-price print")
+    if not any(b[5] > 0 and b[0].hour * 60 + b[0].minute < 805 for b in bars):
+        raise ValueError("no positive-volume continuous-session trades")
     return {
         "bar_count": len(bars),
         "first_clock": bars[0][0].strftime("%H:%M"),
