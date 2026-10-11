@@ -31,6 +31,21 @@ class TestSourceAudit(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exchange"):
             inspect_fugle(p, "2330", "2026-03-31")
 
+    def test_opening_auction_only_is_not_continuous_trade(self):
+        p = sample()
+        p["data"][0]["volume"] = 0
+        p["data"].insert(0, {"date": "2026-03-31T09:00:00+08:00",
+                             "open": 1759, "high": 1759, "low": 1759,
+                             "close": 1759, "volume": 10})
+        with self.assertRaisesRegex(ValueError, "continuous"):
+            inspect_fugle(p, "2330", "2026-03-31")
+
+    def test_tpex_payload_cannot_match_twse_official_anchor(self):
+        p = sample()
+        p["exchange"] = "TPEx"
+        with self.assertRaisesRegex(ValueError, "exchange"):
+            inspect_fugle(p, "2330", "2026-03-31")
+
     def test_zero_volume_auction_rejected(self):
         p = sample()
         p["data"][1]["volume"] = 0
