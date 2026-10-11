@@ -41,11 +41,13 @@ def official_close(payload, target):
     return found[0]
 
 
-def inspect_fugle(payload, stock, target):
+def inspect_fugle(payload, stock, target, expected_exchange="TWSE"):
     if payload.get("symbol") != stock or str(payload.get("timeframe")) != "1":
         raise ValueError("wrong vendor symbol/timeframe")
     if payload.get("exchange") not in ("TWSE", "TPEx"):
         raise ValueError("vendor exchange absent or unsupported")
+    if payload["exchange"] != expected_exchange:
+        raise ValueError("vendor exchange mismatches official anchor market")
     if payload.get("type") not in (None, "EQUITY"):
         raise ValueError("non-equity vendor security type")
     if payload.get("adjusted") is True:
@@ -80,7 +82,8 @@ def inspect_fugle(payload, stock, target):
         raise ValueError("missing or zero-volume 13:30 closing auction")
     if not (closing[1] == closing[2] == closing[3] == closing[4]):
         raise ValueError("13:30 auction is not a single-price print")
-    if not any(b[5] > 0 and b[0].hour * 60 + b[0].minute < 805 for b in bars):
+    # 09:00 opening auction is not continuous-session evidence.
+    if not any(b[5] > 0 and 540 < b[0].hour * 60 + b[0].minute <= 804 for b in bars):
         raise ValueError("no positive-volume continuous-session trades")
     return {
         "bar_count": len(bars),
