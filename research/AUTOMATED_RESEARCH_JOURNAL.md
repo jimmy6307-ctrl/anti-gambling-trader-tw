@@ -49,3 +49,11 @@ Also screened simple cross-sectional 20/60-day relative-strength leader variants
 ### Current conclusion
 
 No strategy has yet met the notification standard across IS + OOS + concentration robustness. Continue searching, but prioritize mechanisms that can survive both the weaker 2024~early-2025 regime and the stronger 2025~2026 regime rather than optimizing for the latter. The repeated IS-negative/OOS-positive pattern across breakouts, continuation, pullback/reclaim, relative-strength, and persistent-breadth filters suggests the next useful step is broader/earlier data or a mechanism explicitly designed for both trend and non-trend regimes—not further threshold tuning on the same two-year sample.
+
+## 2026-10-12 — Auction execution regression guards (data quality only)
+
+Re-read latest branch and raw GitHub Actions quality_audit log at head `0b58a817036ecb1e4cdcc9a03f741f8a975301ad` (run `38194632671`). The quality job passed, with 18/18 offline auction tests and 10/10 independent-minute contract tests; legacy_exploration was skipped. TWSE four-date 4,221-row and TPEx four-date official daily snapshots remain **daily-only**. Neither a passing CI job nor synthetic unit tests establish independent minute/tick history or executable fills.
+
+The head code excludes 09:00 opening auction and 13:30 closing auction from continuous-session signal eligibility. Added three targeted offline regression tests in `research/test_tw_auction_execution_gate.py` (commit `3cabc6d21e792732d660d5c73e1e08e75645b82f`): (1) opening+closing auctions alone must not satisfy continuous-trading activity; (2) 09:00 auction must not be an executable signal; (3) 13:30 auction must not be an executable signal. The CI run for this commit was in progress when the tests were submitted; no pass claimed until raw log is checked.
+
+No new strategy backtest was run. No Fugle/Shioaji credentials, independent authenticated raw responses, verified bar labels, order-book/queue/fill evidence, or genuinely untouched OOS have been obtained. Old 25-stock minute CSV remains quarantined. **DATA GATE = BLOCKED; STRATEGY GATE = BLOCKED; no user notification.**
