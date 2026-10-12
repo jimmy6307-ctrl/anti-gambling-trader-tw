@@ -111,4 +111,32 @@ class TestGate(unittest.TestCase):
                                 open_positions=0,max_positions=2,upper_limit=None)
 
 
+    def test_opening_auction_only_is_not_continuous_activity(self):
+        p = sample()
+        p["data"] = [
+            {"date":"2026-04-23T09:00:00+08:00",
+             "open":2080,"high":2080,"low":2080,"close":2080,"volume":50},
+            p["data"][-1],
+        ]
+        with self.assertRaisesRegex(ValueError, "continuous-session trades"):
+            self.gate(p)
+
+    def test_opening_auction_is_not_executable_signal(self):
+        p = sample()
+        p["data"].insert(0, {
+            "date":"2026-04-23T09:00:00+08:00",
+            "open":2080,"high":2080,"low":2080,"close":2080,"volume":50,
+        })
+        with self.assertRaisesRegex(ValueError, "signal not from continuous session"):
+            indicative_next_bar(self.gate(p),"2026-04-23T09:00:00+08:00",
+                                bar_start_proven=True,shares=1000,available_cash=3000000,
+                                open_positions=0,max_positions=2,upper_limit=2200)
+
+    def test_closing_auction_is_not_executable_signal(self):
+        with self.assertRaisesRegex(ValueError, "signal not from continuous session"):
+            indicative_next_bar(self.gate(),"2026-04-23T13:30:00+08:00",
+                                bar_start_proven=True,shares=1000,available_cash=3000000,
+                                open_positions=0,max_positions=2,upper_limit=2200)
+
+
 if __name__=='__main__':unittest.main()
