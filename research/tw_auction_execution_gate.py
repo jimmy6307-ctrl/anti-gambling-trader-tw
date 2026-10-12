@@ -62,7 +62,9 @@ def validate_minute_auction(payload, symbol, target_day, official_close, exchang
     bars.sort(key=lambda b: b["timestamp"])
     auction = [b for b in bars if b["timestamp"].hour == 13 and
                b["timestamp"].minute == 30]
-    continuous = [b for b in bars if b not in auction]
+    # The 09:00 opening auction is a point print, not continuous trading.
+    # It cannot alone satisfy the continuous-session activity requirement.
+    continuous = [b for b in bars if 540 < b['timestamp'].hour * 60 + b['timestamp'].minute < 805]
     if len(auction) != 1 or auction[0]["volume_lots"] <= 0:
         raise ValueError("missing or zero-volume 13:30 auction print")
     if not continuous or not any(b["volume_lots"] > 0 for b in continuous):
@@ -110,7 +112,7 @@ def indicative_next_bar(audit, signal_bar_time, *, bar_start_proven,
         raise ValueError("signal bar absent")
     if signal_rows[0]["volume_lots"] <= 0:
         raise ValueError("signal bar has zero volume")
-    if signal.hour * 60 + signal.minute >= 805:
+    if not 540 < signal.hour * 60 + signal.minute < 805:
         raise ValueError("signal not from continuous session")
     observed_at = signal + timedelta(minutes=1)
     # A bar opening exactly when the signal becomes observable has an open
