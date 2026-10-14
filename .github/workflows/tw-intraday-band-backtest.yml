@@ -42,6 +42,14 @@ jobs:
         run: python -m unittest discover -s research -p 'test_tw_shioaji_timestamp_gate.py' -v
       - name: Offline TPEx parser contract tests (not live validation)
         run: python -m unittest discover -s research -p 'test_tw_tpex_historical_daily_gate_v2.py' -v
+      - name: Offline Shioaji amount/volume unit sanity tests (not feed validation)
+        run: python -m unittest discover -s research -p 'test_tw_vendor_amount_volume_gate.py' -v
+      - name: Offline session separation tests (not trade execution)
+        run: python -m unittest discover -s research -p 'test_tw_session_separation_gate.py' -v
+      - name: Offline point-in-time exchange membership tests (not historical universe proof)
+        run: python -m unittest discover -s research -p 'test_tw_pit_exchange_gate.py' -v
+      - name: Offline official marketwide daily parser tests (not intraday validation)
+        run: python -m unittest discover -s research -p 'test_tw_marketwide_daily_gate.py' -v
       - name: Official TWSE marketwide historical daily check (quarantined)
         id: twse_marketwide
         continue-on-error: true
