@@ -11,6 +11,11 @@ Input contracts are deliberately normalized, not tied to a vendor API:
 Bars must be selected in advance; the tick feed must contain ALL trades for
 both candidate intervals around each bar (and source completeness must be
 independently established before setting complete_tick_coverage=True).
+
+This is deliberately an INTERIOR continuous-session audit: only bars labelled
+09:05..13:20 and ticks at 09:04..13:21 are admissible. The 09:00 opening
+auction/first-minute boundary and the 13:30 close require separate independent
+auction verification; passing this function NEVER validates those boundaries.
 """
 from __future__ import annotations
 
@@ -20,6 +25,8 @@ from decimal import Decimal, InvalidOperation
 
 TPE = timedelta(hours=8)
 ONE_MINUTE = timedelta(minutes=1)
+BAR_FIRST_MINUTE, BAR_LAST_MINUTE = 9 * 60 + 5, 13 * 60 + 20
+TICK_FIRST_MINUTE, TICK_LAST_MINUTE = 9 * 60 + 4, 13 * 60 + 21
 
 
 def _time(value):
@@ -82,8 +89,8 @@ def audit_tick_bar_semantics(bars, ticks, *, bar_upstream, tick_upstream,
         t = _time(row['date'])
         if t.second or t.microsecond or t in bar_times:
             raise ValueError('duplicate or non-minute bar timestamp')
-        if not (9 * 60 <= t.hour * 60 + t.minute < 13 * 60 + 25):
-            raise ValueError('auction/out-of-session bar in sample')
+        if not (BAR_FIRST_MINUTE <= t.hour * 60 + t.minute <= BAR_LAST_MINUTE):
+            raise ValueError('auction/boundary/out-of-session bar in sample')
         bar_times.add(t)
         op, hi, lo, cl, vol = (_decimal(row[k]) for k in
                                ('open', 'high', 'low', 'close', 'volume_lots'))
@@ -98,8 +105,8 @@ def audit_tick_bar_semantics(bars, ticks, *, bar_upstream, tick_upstream,
     sequences = set()
     for row in ticks:
         t = _time(row['timestamp'])
-        if not (9 * 60 <= t.hour * 60 + t.minute < 13 * 60 + 25):
-            raise ValueError('auction/out-of-session tick in sample')
+        if not (TICK_FIRST_MINUTE <= t.hour * 60 + t.minute <= TICK_LAST_MINUTE):
+            raise ValueError('auction/boundary/out-of-session tick in sample')
         if row.get('condition') != 'REGULAR_BOARD_LOT':
             raise ValueError('non-regular or unclassified trade')
         trade_id = (t.date(), str(row['trade_id']))
