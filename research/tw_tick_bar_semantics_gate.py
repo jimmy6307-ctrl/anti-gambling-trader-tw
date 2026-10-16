@@ -132,9 +132,10 @@ def audit_tick_bar_semantics(bars, ticks, *, bar_upstream, tick_upstream,
     for tick in normalized_ticks:
         t = tick['timestamp']
         start_bins[_minute(t)].append(tick)
-        # End-labeled candle covers (label-1m, label]. A trade exactly
-        # at the minute boundary belongs to the bar ending at that time.
-        end_label = _minute(t) if t == _minute(t) else _minute(t) + ONE_MINUTE
+        # Regular Shioaji one-minute END labels cover [label-1m, label).
+        # An exact minute-boundary trade belongs to the NEXT END label.
+        # The 13:30 close auction is excluded here and audited separately.
+        end_label = _minute(t) + ONE_MINUTE
         end_bins[end_label].append(tick)
 
     scores = {}
