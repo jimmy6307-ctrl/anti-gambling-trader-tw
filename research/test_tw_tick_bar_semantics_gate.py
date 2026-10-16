@@ -20,7 +20,10 @@ def fixture(mode="START"):
                 trade_time = label + timedelta(seconds=10)
             elif mode == "END":
                 trade_time = label - timedelta(seconds=30)
-            else:  # Boundary trade matches BOTH label conventions.
+            elif mode == "END_BOUNDARY":
+                # A trade exactly at L-1m belongs to the END candle L.
+                trade_time = label - timedelta(minutes=1)
+            else:  # Exact boundary at L matches START L, not END L.
                 trade_time = label
             px = Decimal(100 + day_i * 5) + Decimal(i) / 10
             bars.append(dict(date=label.isoformat(), open=str(px),
@@ -56,10 +59,19 @@ class TickBarSemanticsContractTests(unittest.TestCase):
         self.assertEqual(out["label_semantics_supported"], "END")
         self.assertEqual(out["scores"]["END"]["matched"], 30)
 
-    def test_boundary_only_is_ambiguous(self):
+    def test_exact_boundary_belongs_to_start_label(self):
         b, t = fixture("BOUNDARY")
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            run(b, t)
+        out = run(b, t)
+        self.assertEqual(out["label_semantics_supported"], "START")
+        self.assertEqual(out["scores"]["START"]["matched"], 30)
+        self.assertLess(out["scores"]["END"]["matched"], 30)
+
+    def test_exact_boundary_belongs_to_next_end_label(self):
+        b, t = fixture("END_BOUNDARY")
+        out = run(b, t)
+        self.assertEqual(out["label_semantics_supported"], "END")
+        self.assertEqual(out["scores"]["END"]["matched"], 30)
+        self.assertLess(out["scores"]["START"]["matched"], 30)
 
     def test_missing_trade_rejects(self):
         b, t = fixture("START")
