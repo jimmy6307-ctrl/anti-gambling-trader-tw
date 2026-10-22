@@ -20,7 +20,9 @@ def classify_tick(timestamp: str, *, delayed_close_verified: bool = False,
     minute = stamp.hour * 60 + stamp.minute
     if minute == 540 and stamp.second == 0 and stamp.microsecond == 0:
         return "OPENING_AUCTION_CANDIDATE"
-    if 540 <= minute < 805:
+    if minute == 540:
+        raise ValueError("09:00:xx auction/continuous status is ambiguous without independent verification")
+    if 541 <= minute < 805:
         return "NORMAL_CONTINUOUS_CANDIDATE"
     if 805 <= minute < 810:
         raise ValueError("closing auction indicative interval is not a trade")
