@@ -12,6 +12,23 @@ class TestSessionSeparation(unittest.TestCase):
     def test_early_trade(self):
         self.assertEqual(classify_tick('2026-10-08T09:35:21+08:00'), 'NORMAL_CONTINUOUS_CANDIDATE')
 
+    def test_opening_minute_after_exact_auction_is_ambiguous(self):
+        for stamp in ('2026-10-08T09:00:00.000001+08:00',
+                      '2026-10-08T09:00:08.306075+08:00',
+                      '2026-10-08T09:00:59+08:00'):
+            with self.subTest(timestamp=stamp):
+                with self.assertRaisesRegex(ValueError, 'ambiguous'):
+                    classify_tick(stamp)
+
+    def test_0901_continuous_candidate_preserved(self):
+        self.assertEqual(classify_tick('2026-10-08T09:01:00+08:00'),
+                         'NORMAL_CONTINUOUS_CANDIDATE')
+
+    def test_ambiguous_opening_minute_rejected_in_partition(self):
+        with self.assertRaisesRegex(ValueError, 'ambiguous'):
+            separate_ticks([dict(timestamp='2026-10-08T09:00:08.306075+08:00',
+                                 price=2230, volume_lots=2166)])
+
     def test_auction_window(self):
         with self.assertRaisesRegex(ValueError, 'indicative'):
             classify_tick('2026-10-08T13:27:00+08:00')
