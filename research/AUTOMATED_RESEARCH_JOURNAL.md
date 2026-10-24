@@ -134,3 +134,16 @@ Raw log explicitly retains `daily_close_gate=FAIL`, `minute_gate=NOT_TESTED`, `s
 **DATA GATE = BLOCKED; STRATEGY GATE = BLOCKED.** No valid intraday strategy P&L was computed; no claim of a tradable edge or user notification. Next legitimate step is authorized raw independent minute/tick acquisition with timestamp, volume-unit, exchange-session and auction reconciliation, not parameter tuning or contaminated legacy backtesting.
 
 Evidence: https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/39815617499 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/pull/1 .
+
+
+### 2026-10-25 — CI provenance recheck (no minute data; strategy blocked)
+
+Verified PR #1 latest head `c4297d08eba3eced8c2f41c81cadad84d89ba9f4` and both most recent completed Actions runs on that head: `39997577609` and `39997570380` (created 2026-10-23 17:44 UTC). The corresponding `quality_audit` jobs `120565014278` and `120564989397` report **success**, while `legacy_exploration` is **skipped**. Independently read both raw quality-job logs (~130,266 and ~129,397 characters). The latest log's 10 offline test suites total **102 passing tests** (21+10+12+6+10+8+17+5+5+8), including 17 session-separation tests and 12 minute-label boundary tests. This does **not** certify licensed market data or executable fills.
+
+Raw quality output remains `daily_close_gate=FAIL`, `minute_gate=NOT_TESTED`, `strategy_gate=BLOCKED`. The quarantined legacy archive still differs from TWSE official daily closes on **241/320** stock-days and exceeds 10% daily volume discrepancy on **315/320**. Official daily parsing remains **30/30 stock-months / 620 stock-days**, TWSE marketwide **4 sessions / 4,221 daily rows**, and TPEx four daily dates (**821/837/864/873 rows**). The `tw-data-quality-evidence` artifact `12520851677` exists but is not independent minute/tick evidence.
+
+Re-read current `research/tw_session_separation_gate.py`: ambiguous `09:00:xx` (except exactly `09:00:00`) is now rejected, while `09:01` onward is a continuous-trading candidate. This opening-minute fix and the END-labelled minute-boundary fix are **already implemented and offline-tested**; do not reopen them as unresolved. The latest head commit changes the journal only.
+
+No authenticated independent Fugle minute + Shioaji tick raw response, original bytes/SHA256, exchange-session reconciliation on actual licensed ticks, independent feed provenance, verified next-bar execution, historical PIT universe, or truly untouched OOS is available. **DATA GATE = BLOCKED; STRATEGY GATE = BLOCKED.** No strategy P&L computed and no user notification. Next legitimate progress requires legally authorized vendor raw minute/tick acquisition and reconciliation, not more legacy-data parameter searches.
+
+Evidence: https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/39997577609 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/39997570380 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/pull/1 .
