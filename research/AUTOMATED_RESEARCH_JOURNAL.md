@@ -147,3 +147,14 @@ Re-read current `research/tw_session_separation_gate.py`: ambiguous `09:00:xx` (
 No authenticated independent Fugle minute + Shioaji tick raw response, original bytes/SHA256, exchange-session reconciliation on actual licensed ticks, independent feed provenance, verified next-bar execution, historical PIT universe, or truly untouched OOS is available. **DATA GATE = BLOCKED; STRATEGY GATE = BLOCKED.** No strategy P&L computed and no user notification. Next legitimate progress requires legally authorized vendor raw minute/tick acquisition and reconciliation, not more legacy-data parameter searches.
 
 Evidence: https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/39997577609 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/39997570380 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/pull/1 .
+
+
+### 2026-10-25 18:30 Asia/Taipei — Raw CI and source-gate recheck; no authorized minute data
+
+Verified PR #1 head `709ae3f09e68e285a9ae96719b94c1fc209e5a02` and latest completed pull-request Actions run `40139803299` (created 2026-10-24 22:43:55 UTC). `quality_audit` job `121008948957` **success**, `legacy_exploration` job `121008949758` **skipped**. Independently read the raw **130,264-character quality-job log**: ten offline contract suites pass **102/102 tests** (21+10+12+6+10+8+17+5+5+8). The current head commit only edits this journal; no source-quality fix or vendor-data acquisition was introduced.
+
+The raw CI still reports `daily_close_gate=FAIL`, `minute_gate=NOT_TESTED`, `strategy_gate=BLOCKED`. Legacy archive: **241/320** TWSE official close mismatches; **315/320** days with >10% volume discrepancy. Official validation remains daily-only: **30/30 stock-months / 620 stock-days**, TWSE **4 days / 4,221 rows**, TPEx four dates **821/837/864/873 rows**. Artifact `tw-data-quality-evidence` id `12578525851` is not authenticated independent minute/tick evidence. The source classifier at this head **already rejects ambiguous 09:00:xx**, and the END-labelled minute-boundary fix is already offline-tested; do not reopen either as unfixed.
+
+Reviewed the full tracked tree (216 paths); no authorized raw Fugle minute + independent Shioaji tick pair or provenance manifests appear. No authenticated raw bytes/hashes, independent minute agreement, exchange auction reconciliation, verified next-bar fills, historical PIT universe or genuinely unseen OOS. **DATA GATE = BLOCKED; STRATEGY GATE = BLOCKED**; no strategy P&L or trade recommendation. Next legitimate work requires licensed raw market-data acquisition and independent reconciliation, not further tuning on quarantined archives.
+
+Evidence: https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/actions/runs/40139803299 ; https://github.com/jimmy6307-ctrl/anti-gambling-trader-tw/pull/1 .
